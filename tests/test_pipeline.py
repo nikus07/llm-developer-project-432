@@ -1,56 +1,59 @@
-"""Тесты пайплайна с mock-агентами: без LM Studio и без сети."""
+"""Тесты пайплайна и клиента модели с подменой: без LM Studio и без сети."""
 import asyncio
 
 import pytest
 
 from app.llm import client as llm_client
-from app.schemas import CardDraft, CritiqueReport, SupplierFacts
-from app.services import pipeline as steps
+from app.schemas import Card, CritiqueReport, SupplierFacts
+from app.services import pipeline, structured
 
 
-def _facts() -> SupplierFacts:
-    return SupplierFacts(
-        product_name="Блендер погружной «МиксерПро 800»",
-        characteristics={"Мощность": "800 Вт", "Питание": "220 В"},
-    )
+def _facts(**kw) -> SupplierFacts:
+    data = {
+        "product_name": "Блендер погружной «МиксерПро 800»",
+        "characteristics": {"Мощность": "800 Вт", "Питание": "220 В"},
+    }
+    return SupplierFacts(**{**data, **kw})
 
 
-def _draft(title="МиксерПро 800 — блендер 800 Вт") -> CardDraft:
-    return CardDraft(
+def _draft(title="МиксерПро 800 — блендер 800 Вт", confidence=0.9) -> Card:
+    return Card(
         title=title,
         description="Погружной блендер с металлической ножкой и турбо-режимом.",
         characteristics={"Мощность": "800 Вт"},
         benefits=["Металлическая ножка", "6 скоростей"],
+        confidence=confidence,
     )
 
 
 @pytest.fixture
 def fake_llm(monkeypatch):
-    """Подменяем run_agent: сценарий задаётся тестом."""
-    calls = {"n": 0}
+    """Подменяем run_agent на границе слоя: сценарий задаётся тестом."""
+    calls = {"n": 0, "prompts": []}
     scenario: list = []
 
     async def fake_run(agent, prompt):
+        calls["prompts"].append((agent.name, prompt))
         result = scenario[calls["n"]]
         calls["n"] += 1
         if isinstance(result, Exception):
             raise result
         return result
 
-    monkeypatch.setattr(steps, "run_agent", fake_run)
+    monkeypatch.setattr(structured, "run_agent", fake_run)
     return {"scenario": scenario, "calls": calls}
 
 
 def test_extract_parses_json_with_markdown_fencing(fake_llm):
     fake_llm["scenario"].append("```json\n" + _facts().model_dump_json() + "\n```")
-    facts = asyncio.run(steps.extract("текст поставщика"))
+    facts = asyncio.run(pipeline.extract("текст поставщика"))
     assert facts.product_name.startswith("Блендер")
     assert facts.characteristics["Мощность"] == "800 Вт"
 
 
 def test_pipeline_approves_on_first_critique(fake_llm):
     fake_llm["scenario"] += [_facts(), _draft(), CritiqueReport(verdict="approve")]
-    draft, attempts, verdict = asyncio.run(steps.run_pipeline("текст"))
+    draft, attempts, verdict = asyncio.run(pipeline.run_pipeline("текст"))
     assert verdict == "approved"
     assert attempts == 1
     assert draft.title.startswith("МиксерПро")
@@ -63,10 +66,30 @@ def test_pipeline_regenerates_until_max_attempts(fake_llm):
         _draft(), CritiqueReport(verdict="regenerate", issues=["много воды"]),
         _draft(), CritiqueReport(verdict="regenerate", issues=["всё ещё вода"]),
     ]
-    draft, attempts, verdict = asyncio.run(steps.run_pipeline("текст", max_attempts=3))
+    draft, attempts, verdict = asyncio.run(pipeline.run_pipeline("текст", max_attempts=3))
     assert verdict == "rejected"
     assert attempts == 3
     assert draft is not None
+
+
+def test_sparse_input_gives_missing_fields_and_low_confidence(fake_llm):
+    """Неполные данные: недостающие поля непустые, уверенность низкая."""
+    sparse = _facts(characteristics={"Мощность": "800 Вт"}, missing_fields=["гарантия", "цвет"])
+    # модель уверена в себе и «вспомнила» гарантию, которой нет в документах
+    overconfident = _draft(confidence=0.95)
+    overconfident.characteristics["гарантия"] = "12 мес."
+    fake_llm["scenario"] += [sparse, overconfident, CritiqueReport(verdict="approve")]
+
+    draft, _attempts, _verdict = asyncio.run(pipeline.run_pipeline("скудный текст"))
+
+    assert draft.missing_fields == ["гарантия", "цвет"]
+    assert "гарантия" not in draft.characteristics  # выдумка убрана
+    assert draft.confidence < 0.6
+
+
+def test_no_facts_means_zero_confidence():
+    card = pipeline.apply_facts_gaps(_draft(confidence=0.9), _facts(characteristics={}))
+    assert card.confidence == 0.0
 
 
 def test_run_agent_retries_on_429(monkeypatch):

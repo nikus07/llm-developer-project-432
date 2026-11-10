@@ -19,5 +19,11 @@ class Settings(BaseSettings):
 
     db_pool_max_size: int = 10
 
+    card_title_max_len: int = 60
+    # ниже порога карточка уходит человеку на проверку, а не в «готово»
+    confidence_threshold: float = 0.6
+    # сколько раз можно вернуть модели невалидный ответ на лечение
+    structured_max_repairs: int = 2
+
 
 settings = Settings()

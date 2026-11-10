@@ -51,6 +51,7 @@ async def run_agent(agent: Agent, prompt: str):
     max_retries = settings.llm_max_retries
     for attempt in range(1, max_retries + 1):
         try:
+            log.info("llm_call", agent=agent.name, attempt=attempt)
             result = await asyncio.wait_for(
                 Runner.run(agent, prompt), timeout=settings.llm_timeout_s
             )

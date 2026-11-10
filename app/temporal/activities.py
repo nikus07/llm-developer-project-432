@@ -9,7 +9,7 @@ from temporalio.exceptions import ApplicationError
 
 from app.llm.client import _retryable
 from app.repositories import jobs as jobs_repo
-from app.schemas import CardDraft, SupplierFacts
+from app.schemas import Card, SupplierFacts
 from app.services import pipeline
 
 
@@ -65,7 +65,7 @@ async def generate_activity(args: dict) -> dict:
 @activity.defn
 async def critique_activity(args: dict) -> dict:
     facts = SupplierFacts.model_validate(args["facts"])
-    draft = CardDraft.model_validate(args["draft"])
+    draft = Card.model_validate(args["draft"])
     try:
         async with _heartbeating():
             report = await pipeline.critique(facts, draft)

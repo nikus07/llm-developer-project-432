@@ -22,7 +22,7 @@ async def start_card_workflow(job_id: str, supplier_text: str) -> None:
     client = await get_client()
     await client.start_workflow(
         CardWorkflow.run,
-        args=[job_id, supplier_text],
+        args=[job_id, supplier_text, settings.confidence_threshold],
         id=workflow_id(job_id),
         task_queue=settings.temporal_task_queue,
     )

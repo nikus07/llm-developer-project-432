@@ -75,7 +75,9 @@ class CardWorkflow:
         )
 
     @workflow.run
-    async def run(self, job_id: str, supplier_text: str) -> dict:
+    async def run(
+        self, job_id: str, supplier_text: str, confidence_threshold: float = 0.6
+    ) -> dict:
         self._job_id = job_id
         try:
             await self._set_status("extracting")
@@ -99,14 +101,26 @@ class CardWorkflow:
                     break
                 feedback = report["issues"]
 
-            note = None
+            notes: list[str] = []
             if not critic_approved:
-                note = "Критик не одобрил черновик за %d круга: %s" % (
-                    self._attempts,
-                    "; ".join(feedback),
+                notes.append(
+                    "Критик не одобрил черновик за %d круга: %s"
+                    % (self._attempts, "; ".join(feedback))
                 )
+            confidence = float(draft.get("confidence", 0.0))
+            if confidence < confidence_threshold:
+                notes.append(
+                    f"Уверенность {confidence:.2f} ниже порога {confidence_threshold:.2f}"
+                )
+            # низкая уверенность — не «готово»: карточку ждёт человек
+            needs_review = bool(notes)
+            note = "; ".join(notes) or None
             # долгая пауза: ожидание сигнала не занимает ни потока, ни соединения
-            await self._set_status("awaiting_confirmation", result=draft, error=note)
+            await self._set_status(
+                "needs_review" if needs_review else "awaiting_confirmation",
+                result=draft,
+                error=note,
+            )
             await workflow.wait_condition(lambda: self._decision is not None)
 
             if self._decision == "approve":
