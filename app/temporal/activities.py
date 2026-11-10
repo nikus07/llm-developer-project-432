@@ -8,8 +8,10 @@ from temporalio import activity
 from temporalio.exceptions import ApplicationError
 
 from app.llm.client import _retryable
+from app.repositories import documents as documents_repo
 from app.repositories import jobs as jobs_repo
 from app.schemas import Card, SupplierFacts
+from app.services import documents as documents_service
 from app.services import pipeline
 
 
@@ -88,3 +90,14 @@ def set_status_activity(args: dict) -> None:
         result=args.get("result"),
         error=args.get("error"),
     )
+
+
+@activity.defn
+def process_document_activity(document_id: str) -> dict:
+    """Блокирующий шаг (диск, разбор файла, база): исполняется в потоке воркера."""
+    return documents_service.process_document(document_id)
+
+
+@activity.defn
+def mark_document_failed_activity(args: dict) -> None:
+    documents_repo.set_status(args["document_id"], "failed", reason=args["reason"])

@@ -3,6 +3,7 @@ from datetime import timedelta
 
 from temporalio import workflow
 from temporalio.common import RetryPolicy
+from temporalio.exceptions import ActivityError
 
 # код процесса исполняется в песочнице: обычные импорты ограничены
 with workflow.unsafe.imports_passed_through():
@@ -10,6 +11,8 @@ with workflow.unsafe.imports_passed_through():
         critique_activity,
         extract_activity,
         generate_activity,
+        mark_document_failed_activity,
+        process_document_activity,
         set_status_activity,
     )
 
@@ -130,4 +133,36 @@ class CardWorkflow:
             return {"status": self._status, "attempts": self._attempts}
         except Exception as exc:
             await self._set_status("failed", error=str(exc)[:500])
+            raise
+
+
+_DOCUMENT_RETRY = RetryPolicy(
+    initial_interval=timedelta(seconds=2),
+    backoff_coefficient=2.0,
+    maximum_attempts=3,
+    non_retryable_error_types=["LookupError"],
+)
+
+
+@workflow.defn
+class DocumentWorkflow:
+    """Разбор документа: файл → фрагменты в базе. Состояние пишет сам шаг разбора."""
+
+    @workflow.run
+    async def run(self, document_id: str) -> dict:
+        try:
+            return await workflow.execute_activity(
+                process_document_activity,
+                document_id,
+                start_to_close_timeout=timedelta(minutes=5),
+                retry_policy=_DOCUMENT_RETRY,
+            )
+        except ActivityError as exc:
+            reason = str(exc.cause or exc)[:300]
+            await workflow.execute_activity(
+                mark_document_failed_activity,
+                {"document_id": document_id, "reason": f"ошибка разбора: {reason}"},
+                start_to_close_timeout=timedelta(seconds=30),
+                retry_policy=_STEP_RETRY,
+            )
             raise

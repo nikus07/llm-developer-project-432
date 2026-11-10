@@ -1,3 +1,5 @@
+from pathlib import Path
+
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -24,6 +26,11 @@ class Settings(BaseSettings):
     confidence_threshold: float = 0.6
     # сколько раз можно вернуть модели невалидный ответ на лечение
     structured_max_repairs: int = 2
+
+    chunk_size: int = 800
+    chunk_overlap: int = 150
+    max_upload_mb: int = 10
+    upload_dir: Path = Path(__file__).resolve().parents[2] / "uploads"
 
 
 settings = Settings()

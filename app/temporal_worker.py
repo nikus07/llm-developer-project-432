@@ -12,9 +12,11 @@ from app.temporal.activities import (
     critique_activity,
     extract_activity,
     generate_activity,
+    mark_document_failed_activity,
+    process_document_activity,
     set_status_activity,
 )
-from app.temporal.workflows import CardWorkflow
+from app.temporal.workflows import CardWorkflow, DocumentWorkflow
 
 log = get_logger(__name__)
 
@@ -28,12 +30,14 @@ async def main():
         worker = Worker(
             client,
             task_queue=settings.temporal_task_queue,
-            workflows=[CardWorkflow],
+            workflows=[CardWorkflow, DocumentWorkflow],
             activities=[
                 extract_activity,
                 generate_activity,
                 critique_activity,
                 set_status_activity,
+                process_document_activity,
+                mark_document_failed_activity,
             ],
             activity_executor=executor,
         )

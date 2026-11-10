@@ -26,3 +26,19 @@ async def start_card_workflow(job_id: str, supplier_text: str) -> None:
         id=workflow_id(job_id),
         task_queue=settings.temporal_task_queue,
     )
+
+
+def document_workflow_id(document_id: str) -> str:
+    return f"doc-{document_id}"
+
+
+async def start_document_workflow(document_id: str) -> None:
+    from app.temporal.workflows import DocumentWorkflow
+
+    client = await get_client()
+    await client.start_workflow(
+        DocumentWorkflow.run,
+        document_id,
+        id=document_workflow_id(document_id),
+        task_queue=settings.temporal_task_queue,
+    )
