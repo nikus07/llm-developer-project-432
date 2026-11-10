@@ -20,7 +20,7 @@ def _ensure_json(text: str) -> str:
 
 async def extract(supplier_text: str) -> SupplierFacts:
     log.info("step_extract_start")
-    out = await run_agent(extractor_agent, supplier_text)
+    out = await run_agent(extractor_agent(), supplier_text)
     if isinstance(out, SupplierFacts):
         return out
     return SupplierFacts.model_validate_json(_ensure_json(out))
@@ -35,7 +35,7 @@ async def generate(
             f"- {i}" for i in feedback
         )
     log.info("step_generate_start", feedback=bool(feedback))
-    out = await run_agent(generator_agent, prompt)
+    out = await run_agent(generator_agent(), prompt)
     if isinstance(out, CardDraft):
         return out
     return CardDraft.model_validate_json(_ensure_json(out))
@@ -49,7 +49,7 @@ async def critique(facts: SupplierFacts, draft: CardDraft) -> CritiqueReport:
         + draft.model_dump_json(indent=2)
     )
     log.info("step_critique_start")
-    out = await run_agent(critic_agent, prompt)
+    out = await run_agent(critic_agent(), prompt)
     if isinstance(out, CritiqueReport):
         return out
     return CritiqueReport.model_validate_json(_ensure_json(out))
