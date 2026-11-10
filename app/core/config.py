@@ -30,6 +30,21 @@ class Settings(BaseSettings):
     chunk_size: int = 800
     chunk_overlap: int = 150
     max_upload_mb: int = 10
+    # локальные эмбеддинги: модель, размерность (должна совпадать с миграцией 0004) и
+    # префиксы из карточки модели — без них близость релевантных пар проседает
+    embedding_model: str = "intfloat/multilingual-e5-base"
+    embedding_dim: int = 768
+    embedding_query_prefix: str = "query: "
+    embedding_document_prefix: str = "passage: "
+    embedding_batch_size: int = 32
+
+    # поиск: порог косинусной близости, размер выдачи, число кандидатов из каждого списка
+    # и константа слияния по обратным позициям (RRF)
+    search_min_score: float = 0.805
+    search_limit: int = 5
+    search_candidates: int = 20
+    rrf_k: int = 60
+
     upload_dir: Path = Path(__file__).resolve().parents[2] / "uploads"
 
 

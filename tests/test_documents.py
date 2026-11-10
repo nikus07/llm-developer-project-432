@@ -77,15 +77,15 @@ def _register(name: str, content: bytes) -> dict:
 @pytest.mark.parametrize(
     "name", ["blender_passport.pdf", "kettle_manual.pdf", "blender_kp.docx", "kettle_spec.xlsx"]
 )
-def test_supplied_files_reach_indexed(live_db, uploads, name):
+def test_supplied_files_are_parsed(live_db, uploads, name):
     document = _register(name, (DATA / name).read_bytes())
     assert document["status"] == "new"
 
     result = documents_service.process_document(document["id"])
 
-    assert result["status"] == "indexed"
+    assert result["status"] == "parsed"
     stored = documents_repo.get(document["id"])
-    assert stored["status"] == "indexed"
+    assert stored["status"] == "parsed"
     assert stored["chunks"] == result["chunks"] > 0
     for chunk in chunks_repo.list_for_document(document["id"]):
         assert chunk["document"] == name

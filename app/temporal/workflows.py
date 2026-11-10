@@ -11,6 +11,7 @@ with workflow.unsafe.imports_passed_through():
         critique_activity,
         extract_activity,
         generate_activity,
+        index_document_activity,
         mark_document_failed_activity,
         process_document_activity,
         set_status_activity,
@@ -151,12 +152,21 @@ class DocumentWorkflow:
     @workflow.run
     async def run(self, document_id: str) -> dict:
         try:
-            return await workflow.execute_activity(
+            parsed = await workflow.execute_activity(
                 process_document_activity,
                 document_id,
                 start_to_close_timeout=timedelta(minutes=5),
                 retry_policy=_DOCUMENT_RETRY,
             )
+            if parsed["status"] != "parsed":
+                return parsed  # отказ с причиной: индексировать нечего
+            indexed = await workflow.execute_activity(
+                index_document_activity,
+                document_id,
+                start_to_close_timeout=timedelta(minutes=15),  # первая загрузка модели
+                retry_policy=_DOCUMENT_RETRY,
+            )
+            return {**parsed, **indexed}
         except ActivityError as exc:
             reason = str(exc.cause or exc)[:300]
             await workflow.execute_activity(

@@ -101,3 +101,9 @@ def process_document_activity(document_id: str) -> dict:
 @activity.defn
 def mark_document_failed_activity(args: dict) -> None:
     documents_repo.set_status(args["document_id"], "failed", reason=args["reason"])
+
+
+@activity.defn
+def index_document_activity(document_id: str) -> dict:
+    """Блокирующий шаг: эмбеддинги считаются на процессоре, модель грузится один раз."""
+    return documents_service.index_document(document_id)

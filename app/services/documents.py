@@ -6,6 +6,7 @@ from app.core.logging import get_logger
 from app.parsers import docx, pdf, xlsx
 from app.parsers.chunker import chunk_blocks
 from app.parsers.models import DocumentRejected
+from app.rag.reindex import index_chunks
 from app.repositories import chunks as chunks_repo
 from app.repositories import documents as documents_repo
 
@@ -29,6 +30,7 @@ def save_upload(document_id: str, filename: str, content: bytes) -> Path:
 def process_document(document_id: str) -> dict:
     """Блокирующий шаг: диск, разбор файла, база. Исполняется в потоке воркера.
 
+    Состояния: new → parsing → parsed (фрагменты в базе) → indexed (есть векторы, ищется).
     Ожидаемый отказ (скан, битый файл) — статус «failed» с причиной, а не тихий пустой
     результат. Неожиданная ошибка уходит наверх: движок повторит шаг.
     """
@@ -50,6 +52,18 @@ def process_document(document_id: str) -> dict:
 
     chunks_repo.replace_for_document(document_id, document["filename"], chunks)
     pages = max(chunk.page for chunk in chunks)
-    documents_repo.set_status(document_id, "indexed", pages=pages)
-    log.info("document_indexed", document_id=document_id, chunks=len(chunks))
-    return {"status": "indexed", "reason": None, "chunks": len(chunks)}
+    documents_repo.set_status(document_id, "parsed", pages=pages)
+    log.info("document_parsed", document_id=document_id, chunks=len(chunks))
+    return {"status": "parsed", "reason": None, "chunks": len(chunks)}
+
+
+def index_document(document_id: str) -> dict:
+    """Продолжение цепочки: векторы фрагментам разобранного документа → «indexed».
+
+    Блокирующий шаг (модель на процессоре, база): исполняется в потоке воркера.
+    Повторный запуск не пересчитывает уже посчитанные векторы.
+    """
+    indexed = index_chunks(document_id)
+    documents_repo.set_status(document_id, "indexed")
+    log.info("document_indexed", document_id=document_id, new_vectors=indexed)
+    return {"status": "indexed", "new_vectors": indexed}
