@@ -25,6 +25,11 @@ class SourceRef(BaseModel):
     field: str = Field(description="Поле или характеристика карточки")
     quote: str = Field(description="Фрагмент документа, на который опирается значение")
     document: str | None = Field(default=None, description="Имя документа, если известно")
+    chunk_id: int | None = Field(
+        default=None, description="id фрагмента из атрибута id тега source"
+    )
+    page: int | None = Field(default=None, description="Страница; заполняет приложение")
+    section: str | None = Field(default=None, description="Секция; заполняет приложение")
 
 
 class Seo(BaseModel):

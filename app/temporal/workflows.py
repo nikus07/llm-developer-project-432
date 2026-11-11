@@ -3,21 +3,31 @@ from datetime import timedelta
 
 from temporalio import workflow
 from temporalio.common import RetryPolicy
-from temporalio.exceptions import ActivityError
+from temporalio.exceptions import ActivityError, ApplicationError
 
 # код процесса исполняется в песочнице: обычные импорты ограничены
 with workflow.unsafe.imports_passed_through():
     from app.temporal.activities import (
         critique_activity,
+        documents_state_activity,
         extract_activity,
         generate_activity,
         index_document_activity,
         mark_document_failed_activity,
         process_document_activity,
+        rag_critique_activity,
+        rag_extract_activity,
+        rag_generate_activity,
+        retrieve_activity,
         set_status_activity,
+        verify_references_activity,
     )
 
 MAX_ATTEMPTS = 3
+MAX_REFERENCE_FAILURES = 2  # выдуманная ссылка: одна переделка, при повторе — к человеку
+_DOCUMENTS_WAIT = timedelta(minutes=15)
+_DOCUMENTS_POLL = timedelta(seconds=2)
+_RETRIEVE_TIMEOUT = timedelta(minutes=10)  # первая загрузка модели эмбеддингов
 
 # повтор ШАГА: если воркер умер или шаг упал; повтор отдельного вызова модели — в llm/client.py
 _STEP_RETRY = RetryPolicy(
@@ -175,4 +185,166 @@ class DocumentWorkflow:
                 start_to_close_timeout=timedelta(seconds=30),
                 retry_policy=_STEP_RETRY,
             )
+            raise
+
+
+@workflow.defn
+class GenerateWorkflow:
+    """Документы → поиск → генерация со ссылками → проверка → ожидание человека.
+
+    Состояния задачи: queued → parsing → indexing → retrieving → generating → verifying →
+    awaiting_confirmation | needs_review → approved | rejected | failed.
+    """
+
+    def __init__(self) -> None:
+        self._status = "queued"
+        self._attempts = 0
+        self._decision: str | None = None
+        self._reason: str | None = None
+        self._job_id = ""
+
+    @workflow.signal
+    def approve(self) -> None:
+        self._decision = "approve"
+
+    @workflow.signal
+    def reject(self, reason: str = "") -> None:
+        self._decision = "reject"
+        self._reason = reason or None
+
+    @workflow.query
+    def state(self) -> dict:
+        return {"status": self._status, "attempts": self._attempts}
+
+    async def _set_status(
+        self, status: str, *, result: dict | None = None, error: str | None = None
+    ) -> None:
+        self._status = status
+        await workflow.execute_activity(
+            set_status_activity,
+            {
+                "job_id": self._job_id,
+                "status": status,
+                "attempts": self._attempts,
+                "result": result,
+                "error": error,
+            },
+            start_to_close_timeout=_DB_STEP_TIMEOUT,
+            retry_policy=_STEP_RETRY,
+        )
+
+    async def _llm_step(self, activity_fn, arg):
+        return await workflow.execute_activity(
+            activity_fn,
+            arg,
+            start_to_close_timeout=_LLM_STEP_TIMEOUT,
+            heartbeat_timeout=_LLM_HEARTBEAT_TIMEOUT,
+            retry_policy=_STEP_RETRY,
+        )
+
+    async def _db_step(self, activity_fn, arg, timeout: timedelta = _DB_STEP_TIMEOUT):
+        return await workflow.execute_activity(
+            activity_fn, arg, start_to_close_timeout=timeout, retry_policy=_STEP_RETRY
+        )
+
+    async def _wait_for_documents(self, document_ids: list[str]) -> dict:
+        """Документы разбирают их собственные процессы; здесь только ждём результата."""
+        deadline = workflow.now() + _DOCUMENTS_WAIT
+        stage = None
+        while True:
+            state = await self._db_step(documents_state_activity, document_ids)
+            if not state["waiting"]:
+                return state
+            if state["stage"] != stage:
+                stage = state["stage"]
+                await self._set_status(stage)
+            if workflow.now() > deadline:
+                raise ApplicationError("документы не успели разобраться за отведённое время")
+            await workflow.sleep(_DOCUMENTS_POLL)
+
+    @workflow.run
+    async def run(
+        self,
+        job_id: str,
+        document_ids: list[str],
+        hint: str | None = None,
+        confidence_threshold: float = 0.6,
+    ) -> dict:
+        self._job_id = job_id
+        try:
+            await self._set_status("queued")
+            docs = await self._wait_for_documents(document_ids)
+            if not docs["ready"]:
+                reasons = "; ".join(str(s["reason"]) for s in docs["skipped"])
+                raise ApplicationError(f"нет ни одного готового документа: {reasons}")
+            info = [f"пропущен документ {s['id']}: {s['reason']}" for s in docs["skipped"]]
+
+            await self._set_status("retrieving")
+            context = await self._db_step(
+                retrieve_activity,
+                {"document_ids": docs["ready"], "hint": hint},
+                timeout=_RETRIEVE_TIMEOUT,
+            )
+            if not context["items"]:
+                raise ApplicationError("в выбранных документах ничего не найдено")
+
+            await self._set_status("generating")
+            facts = await self._llm_step(rag_extract_activity, context)
+
+            feedback: list[str] = []
+            card: dict = {}
+            unresolved: list[str] = []
+            critic_approved = False
+            reference_failures = 0
+            while self._attempts < MAX_ATTEMPTS:
+                self._attempts += 1
+                await self._set_status("generating")
+                draft = await self._llm_step(
+                    rag_generate_activity,
+                    {"facts": facts, "context": context, "hint": hint, "feedback": feedback},
+                )
+                await self._set_status("verifying")
+                checked = await self._db_step(
+                    verify_references_activity, {"card": draft, "context": context}
+                )
+                card = checked["card"]  # только верные ссылки, с документом и страницей
+                if checked["issues"]:
+                    unresolved = checked["issues"]
+                    feedback = unresolved
+                    reference_failures += 1
+                    if reference_failures >= MAX_REFERENCE_FAILURES:
+                        break  # выдуманные ссылки при повторе — к человеку
+                    continue
+                unresolved = []
+                report = await self._llm_step(
+                    rag_critique_activity, {"facts": facts, "context": context, "card": card}
+                )
+                if report["verdict"] == "approve":
+                    critic_approved = True
+                    break
+                feedback = report["issues"]
+
+            review: list[str] = []
+            if unresolved:
+                review.append("Ссылки не прошли проверку: " + "; ".join(unresolved))
+            elif not critic_approved:
+                review.append("Проверка не одобрила карточку: " + "; ".join(feedback))
+            confidence = float(card.get("confidence", 0.0))
+            if confidence < confidence_threshold:
+                review.append(
+                    f"Уверенность {confidence:.2f} ниже порога {confidence_threshold:.2f}"
+                )
+            notes = "; ".join([*review, *info]) or None
+            await self._set_status(
+                "needs_review" if review else "awaiting_confirmation", result=card, error=notes
+            )
+            await workflow.wait_condition(lambda: self._decision is not None)
+
+            if self._decision == "approve":
+                await self._set_status("approved")
+            else:
+                await self._set_status("rejected", error=self._reason)
+            return {"status": self._status, "attempts": self._attempts}
+        except Exception as exc:
+            await self._set_status("failed", error=str(exc)[:500])
             raise

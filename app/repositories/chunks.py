@@ -50,6 +50,7 @@ def list_for_document(document_id: str) -> list[dict]:
 _FILTER_COLUMNS = {
     "document": "c.document = %({name})s",
     "document_id": "c.document_id = %({name})s",
+    "document_ids": "c.document_id = ANY(%({name})s)",
     "section": "c.section = %({name})s",
     "page": "c.page = %({name})s",
     "article": "c.article ILIKE '%%' || %({name})s || '%%'",
@@ -60,6 +61,21 @@ _HIT_COLUMNS = (
     "c.id, c.document_id, c.document, c.idx, c.kind, c.page, c.section, "
     "c.article, c.brand, c.text"
 )
+
+
+def get_many(chunk_ids: list[int]) -> dict[int, dict]:
+    """Фрагменты по id: проверка, что ссылка указывает на существующий фрагмент."""
+    if not chunk_ids:
+        return {}
+    with connection() as conn, conn.cursor(row_factory=dict_row) as cur:
+        cur.execute(
+            """
+            SELECT id, document_id, document, page, section, text
+              FROM chunks WHERE id = ANY(%s)
+            """,
+            (list(chunk_ids),),
+        )
+        return {row["id"]: row for row in cur.fetchall()}
 
 
 def vector_literal(vector: list[float]) -> str:

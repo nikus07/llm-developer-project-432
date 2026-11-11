@@ -8,11 +8,12 @@ from temporalio import activity
 from temporalio.exceptions import ApplicationError
 
 from app.llm.client import _retryable
+from app.rag.context import Context
 from app.repositories import documents as documents_repo
 from app.repositories import jobs as jobs_repo
-from app.schemas import Card, SupplierFacts
+from app.schemas import Card, CritiqueReport, SupplierFacts
 from app.services import documents as documents_service
-from app.services import pipeline
+from app.services import pipeline, rag_pipeline
 
 
 def _to_application_error(exc: Exception) -> Exception:
@@ -107,3 +108,67 @@ def mark_document_failed_activity(args: dict) -> None:
 def index_document_activity(document_id: str) -> dict:
     """Блокирующий шаг: эмбеддинги считаются на процессоре, модель грузится один раз."""
     return documents_service.index_document(document_id)
+
+
+# --- генерация по документам (сквозной процесс) ---
+
+
+@activity.defn
+def documents_state_activity(document_ids: list[str]) -> dict:
+    """Что готово, что ещё разбирается, что отвергнуто (короткое обращение к базе)."""
+    return rag_pipeline.documents_state(document_ids)
+
+
+@activity.defn
+def retrieve_activity(args: dict) -> dict:
+    """Блокирующий шаг: эмбеддинг запросов на процессоре и поиск в базе."""
+    context = rag_pipeline.retrieve_context(args["document_ids"], args.get("hint"))
+    return context.to_dict()
+
+
+@activity.defn
+async def rag_extract_activity(context: dict) -> dict:
+    try:
+        async with _heartbeating():
+            facts = await rag_pipeline.extract_facts(Context.from_dict(context))
+    except Exception as exc:
+        raise _to_application_error(exc) from exc
+    return facts.model_dump()
+
+
+@activity.defn
+async def rag_generate_activity(args: dict) -> dict:
+    try:
+        async with _heartbeating():
+            card = await rag_pipeline.generate_card(
+                SupplierFacts.model_validate(args["facts"]),
+                Context.from_dict(args["context"]),
+                args.get("hint"),
+                args.get("feedback") or None,
+            )
+    except Exception as exc:
+        raise _to_application_error(exc) from exc
+    return card.model_dump()
+
+
+@activity.defn
+def verify_references_activity(args: dict) -> dict:
+    """Проверка ссылок кодом: фрагмент есть в базе и был в контексте."""
+    card, issues = rag_pipeline.verify_references(
+        Card.model_validate(args["card"]), Context.from_dict(args["context"])
+    )
+    return {"card": card.model_dump(), "issues": issues}
+
+
+@activity.defn
+async def rag_critique_activity(args: dict) -> dict:
+    try:
+        async with _heartbeating():
+            report: CritiqueReport = await rag_pipeline.critique_card(
+                SupplierFacts.model_validate(args["facts"]),
+                Context.from_dict(args["context"]),
+                Card.model_validate(args["card"]),
+            )
+    except Exception as exc:
+        raise _to_application_error(exc) from exc
+    return report.model_dump()

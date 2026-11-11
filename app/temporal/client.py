@@ -42,3 +42,15 @@ async def start_document_workflow(document_id: str) -> None:
         id=document_workflow_id(document_id),
         task_queue=settings.temporal_task_queue,
     )
+
+
+async def start_generate_workflow(job_id: str, document_ids: list[str], hint: str | None) -> None:
+    from app.temporal.workflows import GenerateWorkflow
+
+    client = await get_client()
+    await client.start_workflow(
+        GenerateWorkflow.run,
+        args=[job_id, document_ids, hint, settings.confidence_threshold],
+        id=workflow_id(job_id),
+        task_queue=settings.temporal_task_queue,
+    )

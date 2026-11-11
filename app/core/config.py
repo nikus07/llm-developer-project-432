@@ -45,6 +45,19 @@ class Settings(BaseSettings):
     search_candidates: int = 20
     rrf_k: int = 60
 
+    # генерация по документам: предел размера контекста, число фрагментов на запрос
+    # и аспекты, по которым ищем сведения о товаре. Поиск идёт внутри выбранных документов,
+    # поэтому порог близости здесь 0: всё найденное в них — не мусор, а материал.
+    context_max_chars: int = 6000
+    generate_top_k: int = 8
+    generate_min_score: float = 0.0
+    generate_aspects: list[str] = [
+        "технические характеристики",
+        "артикул модель",
+        "гарантия комплект поставки",
+        "цена условия поставки",
+    ]
+
     upload_dir: Path = Path(__file__).resolve().parents[2] / "uploads"
 
 

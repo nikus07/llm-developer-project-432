@@ -10,14 +10,20 @@ from app.core.db import close_pool, init_pool
 from app.core.logging import get_logger, setup_logging
 from app.temporal.activities import (
     critique_activity,
+    documents_state_activity,
     extract_activity,
     generate_activity,
     index_document_activity,
     mark_document_failed_activity,
     process_document_activity,
+    rag_critique_activity,
+    rag_extract_activity,
+    rag_generate_activity,
+    retrieve_activity,
     set_status_activity,
+    verify_references_activity,
 )
-from app.temporal.workflows import CardWorkflow, DocumentWorkflow
+from app.temporal.workflows import CardWorkflow, DocumentWorkflow, GenerateWorkflow
 
 log = get_logger(__name__)
 
@@ -31,7 +37,7 @@ async def main():
         worker = Worker(
             client,
             task_queue=settings.temporal_task_queue,
-            workflows=[CardWorkflow, DocumentWorkflow],
+            workflows=[CardWorkflow, DocumentWorkflow, GenerateWorkflow],
             activities=[
                 extract_activity,
                 generate_activity,
@@ -40,6 +46,12 @@ async def main():
                 process_document_activity,
                 index_document_activity,
                 mark_document_failed_activity,
+                documents_state_activity,
+                rag_critique_activity,
+                rag_extract_activity,
+                rag_generate_activity,
+                retrieve_activity,
+                verify_references_activity,
             ],
             activity_executor=executor,
         )
