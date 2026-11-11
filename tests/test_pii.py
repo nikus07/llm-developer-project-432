@@ -26,7 +26,7 @@ from app.guardrails.pii import (
 def test_phone_is_masked(phone):
     masked, counts = mask_text(f"Звоните: {phone}, спросите Анну.")
     assert phone not in masked
-    assert "[ТЕЛЕФОН_1]" in masked
+    assert "[PHONE_1]" in masked
     assert counts == {"телефон": 1}
 
 
@@ -40,7 +40,7 @@ def test_inn_with_valid_checksum_is_masked():
     # 7712345671 — ИНН организации с верной контрольной цифрой
     assert _inn_checksum("7712345671")
     masked, counts = mask_text("ИНН компании: 7712345671")
-    assert masked == "ИНН компании: [ИНН_1]" and counts == {"инн": 1}
+    assert masked == "ИНН компании: [INN_1]" and counts == {"инн": 1}
 
 
 def test_inn_of_individual_with_two_check_digits():
@@ -67,7 +67,7 @@ def test_ordinary_numbers_are_not_touched():
 def test_card_number_needs_luhn():
     assert luhn_valid("4111 1111 1111 1111")
     masked, counts = mask_text("Оплата картой 4111 1111 1111 1111 прошла")
-    assert "4111" not in masked and "[КАРТА_1]" in masked and counts == {"карта": 1}
+    assert "4111" not in masked and "[CARD_1]" in masked and counts == {"карта": 1}
     wrong = "номер 4111 1111 1111 1112 — не карта"
     assert mask_text(wrong) == (wrong, {})
 
@@ -76,8 +76,8 @@ def test_same_value_gets_same_label_and_labels_count_from_one():
     masker = PiiMasker()
     first = masker.mask("Тел. +7 926 555-14-08 и +7 495 085-21-62")
     second = masker.mask("Опять +7 926 555-14-08")
-    assert first == "Тел. [ТЕЛЕФОН_1] и [ТЕЛЕФОН_2]"
-    assert second == "Опять [ТЕЛЕФОН_1]"  # метка стабильна между фрагментами
+    assert first == "Тел. [PHONE_1] и [PHONE_2]"
+    assert second == "Опять [PHONE_1]"  # метка стабильна между фрагментами
     assert masker.counts == {"телефон": 3}
 
 
@@ -109,10 +109,7 @@ def test_manager_block_from_commercial_offer():
 def test_mask_pii_returns_masked_text_and_findings_without_values():
     masked, found = mask_pii("Звоните +7 926 555-14-08, почта a@b.example")
     assert "926" not in masked and "a@b.example" not in masked
-    assert found == [
-        {"kind": "phone", "label": "[ТЕЛЕФОН_1]"},
-        {"kind": "email", "label": "[EMAIL_1]"},
-    ]
+    assert [(f.kind, f.label) for f in found] == [("phone", "[PHONE_1]"), ("email", "[EMAIL_1]")]
     assert mask_pii("ничего личного") == ("ничего личного", [])
 
 

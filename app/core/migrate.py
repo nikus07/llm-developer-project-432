@@ -3,6 +3,7 @@
 Запуск: python -m app.core.migrate
 Применённые версии хранятся в таблице schema_migrations (её создаёт 0001_init.sql).
 """
+import time
 from pathlib import Path
 
 import psycopg
@@ -23,10 +24,22 @@ def applied_versions(conn: psycopg.Connection) -> set[str]:
     return {row[0] for row in conn.execute("SELECT version FROM schema_migrations")}
 
 
+def _connect(url: str, wait_s: float = 30.0) -> psycopg.Connection:
+    """База в Compose поднимается не мгновенно: до wait_s секунд повторяем подключение."""
+    deadline = time.monotonic() + wait_s
+    while True:
+        try:
+            return psycopg.connect(url)
+        except psycopg.OperationalError:
+            if time.monotonic() > deadline:
+                raise
+            time.sleep(1)
+
+
 def migrate(database_url: str | None = None, directory: Path = MIGRATIONS_DIR) -> list[str]:
     """Применяет новые миграции, возвращает их версии. Каждая — в своей транзакции."""
     applied_now: list[str] = []
-    with psycopg.connect(database_url or settings.database_url) as conn:
+    with _connect(database_url or settings.database_url) as conn:
         done = applied_versions(conn)
         conn.commit()
         for path in discover(directory):

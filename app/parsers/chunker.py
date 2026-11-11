@@ -1,6 +1,11 @@
-"""Резка блоков документа на фрагменты с метаданными."""
+"""Резка блоков документа на фрагменты с метаданными.
+
+Фрагмент — словарь: {"chunk_id", "ordinal", "text", "metadata"}. В метаданных документ,
+страница, секция, тип (text | row) и, у строк таблицы с артикулом, артикул и бренд.
+"""
 from app.core.config import settings
-from app.parsers.models import Block, Chunk
+from app.parsers.models import Block
+from app.parsers.table import key_column, row_text
 
 
 def _split_long_line(line: str, size: int) -> list[str]:
@@ -54,74 +59,63 @@ def split_text(text: str, size: int, overlap: int) -> list[str]:
     return chunks
 
 
-def _join(values: list[str | None]) -> str | None:
-    unique = list(dict.fromkeys(v for v in values if v))
-    return ", ".join(unique) if unique else None
-
-
 def chunk_blocks(
     blocks: list[Block],
+    doc_id: str,
     *,
     size: int | None = None,
     overlap: int | None = None,
-) -> list[Chunk]:
+) -> list[dict]:
+    """Блоки → фрагменты. Текст режется с перекрытием, таблица — по строкам, строку не рвём.
+
+    Строки таблицы с артикулом — по одной на фрагмент: артикул в метаданных точный, а
+    поиск по артикулу возвращает строку, а не соседей. Остальные таблицы упаковываются
+    строками до размера фрагмента.
+    """
     size = size or settings.chunk_size
     overlap = settings.chunk_overlap if overlap is None else overlap
-    chunks: list[Chunk] = []
+    chunks: list[dict] = []
 
-    def add(kind: str, text: str, block: Block, article=None, brand=None) -> None:
+    def add(text: str, block: Block, kind: str, **extra) -> None:
+        ordinal = len(chunks)
+        metadata = {
+            "doc_id": doc_id,
+            "page": block.page,
+            "section": block.section,
+            "kind": kind,
+            **{k: v for k, v in extra.items() if v},
+        }
         chunks.append(
-            Chunk(
-                idx=len(chunks),
-                kind=kind,
-                text=text,
-                page=block.page,
-                section=block.section,
-                article=article,
-                brand=brand,
-            )
+            {
+                "chunk_id": f"{doc_id}-{ordinal}",
+                "ordinal": ordinal,
+                "text": text,
+                "metadata": metadata,
+            }
         )
 
-    index = 0
-    while index < len(blocks):
-        block = blocks[index]
+    for block in blocks:
         if block.kind == "text":
-            for piece in split_text(block.text, size, overlap):
-                add("text", piece, block)
-            index += 1
+            for piece in split_text(block.content, size, overlap):
+                add(piece, block, "text")
             continue
 
-        # таблица: подряд идущие строки одной секции и страницы; строку не рвём
-        group = [block]
-        index += 1
-        while (
-            index < len(blocks)
-            and blocks[index].kind == "row"
-            and (blocks[index].page, blocks[index].section) == (block.page, block.section)
-        ):
-            group.append(blocks[index])
-            index += 1
+        headers, body = block.rows[0], block.rows[1:]
+        rows = [(row_text(headers, row), row) for row in body]
+        rows = [(parts, row) for parts, row in rows if parts[0]]
+        if key_column(headers) is not None:
+            for (text, articul, brand), _row in rows:
+                add(text, block, "row", articul=articul, brand=brand)
+            continue
 
-        batch: list[Block] = []
+        batch: list[str] = []
         length = 0
-        for row in group:
-            if batch and length + 1 + len(row.text) > size:
-                add(
-                    "row",
-                    "\n".join(b.text for b in batch),
-                    block,
-                    _join([b.article for b in batch]),
-                    _join([b.brand for b in batch]),
-                )
+        for (text, _articul, _brand), _row in rows:
+            if batch and length + 1 + len(text) > size:
+                add("\n".join(batch), block, "row")
                 batch, length = [], 0
-            batch.append(row)
-            length += len(row.text) + 1
+            batch.append(text)
+            length += len(text) + 1
         if batch:
-            add(
-                "row",
-                "\n".join(b.text for b in batch),
-                block,
-                _join([b.article for b in batch]),
-                _join([b.brand for b in batch]),
-            )
+            add("\n".join(batch), block, "row")
     return chunks

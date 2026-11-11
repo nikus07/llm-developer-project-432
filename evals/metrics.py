@@ -87,9 +87,9 @@ def _value_in_text(value: str, text: str) -> bool:
 
 def citation_report(
     card: CardDraft,
-    chunk_texts: dict[int, str],
+    chunk_texts: dict[str, str],
     probes: dict | None = None,
-    chunk_pages: dict[int, int] | None = None,
+    chunk_pages: dict[str, int] | None = None,
 ) -> dict:
     """Метрика 2: заявленный источник действительно содержит то, на что ссылается.
 

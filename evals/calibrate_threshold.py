@@ -6,7 +6,6 @@
 лежать между худшим верным и лучшим мусорным результатом.
 """
 from app.core.db import close_pool, connection, init_pool
-from app.rag.embedder import embed_query
 from app.repositories import chunks as chunks_repo
 
 # (запрос, подстрока, которая должна быть в верном фрагменте)
@@ -35,13 +34,15 @@ IRRELEVANT = [
 
 
 def top_hit(query: str) -> tuple[float, str]:
-    hits = chunks_repo.search_vector(embed_query(query), limit=1, min_score=0.0)
+    with connection() as conn:
+        hits = chunks_repo.search_vector(conn, query, top_k=1, threshold=0.0)
     return (hits[0]["score"], hits[0]["text"]) if hits else (0.0, "")
 
 
 def best_score_for(query: str, needle: str) -> float:
     """Близость самого близкого фрагмента, в тексте которого есть нужная подстрока."""
-    hits = chunks_repo.search_vector(embed_query(query), limit=50, min_score=0.0)
+    with connection() as conn:
+        hits = chunks_repo.search_vector(conn, query, top_k=50, threshold=0.0)
     scores = [h["score"] for h in hits if needle.lower() in h["text"].lower()]
     return max(scores, default=0.0)
 

@@ -8,7 +8,7 @@ from app.core.config import settings
 from app.core.logging import get_logger
 from app.repositories import documents as documents_repo
 from app.schemas.documents import DocumentOut
-from app.services.documents import SUPPORTED_EXTENSIONS, save_upload
+from app.services.documents import SUPPORTED_EXTENSIONS, kind_of, save_upload
 from app.temporal.client import start_document_workflow
 
 router = APIRouter(prefix="/documents", tags=["documents"])
@@ -35,7 +35,7 @@ async def upload_document(file: UploadFile) -> dict:
 
     content_hash = hashlib.sha256(content).hexdigest()
     document, created = await run_in_threadpool(
-        documents_repo.create, filename, content_hash, len(content)
+        documents_repo.create, filename, content_hash, len(content), kind_of(filename)
     )
     if created:
         try:

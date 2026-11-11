@@ -1,3 +1,4 @@
+from app.parsers.models import Block
 from app.parsers.normalizer import clean_text, is_page_marker, normalize, repeated_line_keys
 
 
@@ -55,12 +56,15 @@ def test_page_marker_detected():
 
 
 def test_normalize_pages_removes_footers_and_cleans_text():
-    pages = [
-        "Паспорт\nмощ-\nность 800 Вт\nООО «Дом» — стр. 1",
-        "Комплект\nблок   мотора\nООО «Дом» — стр. 2",
+    blocks = [
+        Block("text", "Паспорт\nмощ-\nность 800 Вт\nООО «Дом» — стр. 1", 1, "Раздел"),
+        Block("text", "Комплект\nблок   мотора\nООО «Дом» — стр. 2", 2, "Раздел"),
     ]
-    assert normalize(pages) == ["Паспорт\nмощность 800 Вт", "Комплект\nблок мотора"]
+    assert [b.content for b in normalize(blocks)] == [
+        "Паспорт\nмощность 800 Вт",
+        "Комплект\nблок мотора",
+    ]
 
 
-def test_normalize_single_page_text_is_just_cleaned():
-    assert normalize("а   б\u00a0в") == "а б в"
+def test_normalize_single_block_is_just_cleaned():
+    assert normalize([Block("text", "а   б\u00a0в", 1, "Раздел")])[0].content == "а б в"

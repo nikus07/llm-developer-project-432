@@ -4,8 +4,9 @@ CREATE TABLE IF NOT EXISTS documents (
     filename     TEXT NOT NULL,
     -- хэш содержимого: повторная загрузка того же файла не создаёт дубль
     content_hash TEXT NOT NULL UNIQUE,
-    size_bytes   INTEGER NOT NULL,
-    status       TEXT NOT NULL DEFAULT 'new',  -- new | parsing | indexed | failed
+    kind         TEXT NOT NULL,                -- pdf | docx | xlsx
+    size_bytes   INTEGER,
+    status       TEXT NOT NULL DEFAULT 'new',  -- new | parsing | parsed | indexed | failed
     reason       TEXT,                         -- причина отказа
     pages        INTEGER,
     created_at   TIMESTAMPTZ NOT NULL DEFAULT now(),
@@ -13,17 +14,14 @@ CREATE TABLE IF NOT EXISTS documents (
 );
 
 CREATE TABLE IF NOT EXISTS chunks (
-    id          BIGSERIAL PRIMARY KEY,
-    document_id TEXT NOT NULL REFERENCES documents (id) ON DELETE CASCADE,
-    document    TEXT NOT NULL,      -- имя файла: для ссылки на источник
-    idx         INTEGER NOT NULL,   -- порядковый номер фрагмента в документе
-    kind        TEXT NOT NULL,      -- text | row
-    text        TEXT NOT NULL,
-    page        INTEGER NOT NULL,
-    section     TEXT NOT NULL,
-    article     TEXT,
-    brand       TEXT,
-    UNIQUE (document_id, idx)
+    id       TEXT PRIMARY KEY,                 -- на него ссылается карточка: «<doc_id>-<ordinal>»
+    doc_id   TEXT NOT NULL REFERENCES documents (id) ON DELETE CASCADE,
+    ordinal  INTEGER NOT NULL,                 -- порядковый номер фрагмента в документе
+    text     TEXT NOT NULL,
+    -- doc_id, page, section, kind (text | row), articul, brand — для фильтров и ссылок
+    metadata JSONB NOT NULL DEFAULT '{}'::jsonb,
+    UNIQUE (doc_id, ordinal)
 );
 
-CREATE INDEX IF NOT EXISTS chunks_article_idx ON chunks (article);
+CREATE INDEX IF NOT EXISTS chunks_doc_idx ON chunks (doc_id);
+CREATE INDEX IF NOT EXISTS chunks_articul_idx ON chunks ((metadata ->> 'articul'));

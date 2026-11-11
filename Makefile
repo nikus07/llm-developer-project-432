@@ -1,7 +1,7 @@
 .PHONY: help setup lint lint-fix test infra migrate api temporal-worker reindex search costs eval
 
 help:
-	@echo "make setup           - поставить зависимости из uv.lock (uv sync --frozen)"
+	@echo "make setup           - зависимости из uv.lock и миграции (база уже должна быть поднята)"
 	@echo "make infra           - поднять postgres + temporal (docker compose)"
 	@echo "make migrate         - применить миграции"
 	@echo "make api             - FastAPI на :8000"
@@ -14,6 +14,7 @@ help:
 
 setup:
 	uv sync --frozen
+	uv run --frozen python -m app.core.migrate
 
 lint:
 	uv run ruff check .
@@ -28,7 +29,7 @@ infra:
 	docker compose up -d
 
 migrate:
-	uv run python -m app.core.migrate
+	uv run --frozen python -m app.core.migrate
 
 api:
 	uv run uvicorn app.main:app --reload --port 8000

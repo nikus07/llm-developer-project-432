@@ -7,11 +7,11 @@ from openai import APIStatusError
 from temporalio import activity
 from temporalio.exceptions import ApplicationError
 
+from app.guardrails import GuardReport
 from app.llm.client import _retryable
-from app.rag.context import Context
 from app.repositories import documents as documents_repo
 from app.repositories import jobs as jobs_repo
-from app.schemas import CardDraft, CritiqueReport, SupplierFacts
+from app.schemas import CardDraft, SupplierFacts
 from app.services import documents as documents_service
 from app.services import pipeline, rag_pipeline
 
@@ -121,74 +121,41 @@ def documents_state_activity(document_ids: list[str]) -> dict:
 
 
 @activity.defn
-def retrieve_activity(args: dict) -> dict:
-    """Блокирующий шаг: эмбеддинг запросов на процессоре и поиск в базе."""
-    context = rag_pipeline.retrieve_context(args["document_ids"], args.get("hint"))
-    return context.to_dict()
-
-
-@activity.defn
-async def rag_extract_activity(context: dict) -> dict:
-    try:
-        async with _heartbeating():
-            facts = await rag_pipeline.extract_facts(Context.from_dict(context))
-    except Exception as exc:
-        raise _to_application_error(exc) from exc
-    return facts.model_dump()
-
-
-@activity.defn
-async def rag_generate_activity(args: dict) -> dict:
-    try:
-        async with _heartbeating():
-            card = await rag_pipeline.generate_card(
-                SupplierFacts.model_validate(args["facts"]),
-                Context.from_dict(args["context"]),
-                args.get("hint"),
-                args.get("feedback") or None,
-            )
-    except Exception as exc:
-        raise _to_application_error(exc) from exc
-    return card.model_dump()
-
-
-@activity.defn
-def verify_references_activity(args: dict) -> dict:
-    """Проверка ссылок кодом: фрагмент есть в базе и был в контексте."""
-    card, issues = rag_pipeline.verify_references(
-        CardDraft.model_validate(args["card"]), Context.from_dict(args["context"])
-    )
-    return {"card": card.model_dump(), "issues": issues}
-
-
-@activity.defn
-async def rag_critique_activity(args: dict) -> dict:
-    try:
-        async with _heartbeating():
-            report: CritiqueReport = await rag_pipeline.critique_card(
-                SupplierFacts.model_validate(args["facts"]),
-                Context.from_dict(args["context"]),
-                CardDraft.model_validate(args["card"]),
-            )
-    except Exception as exc:
-        raise _to_application_error(exc) from exc
-    return report.model_dump()
-
-
-@activity.defn
-async def screen_activity(context: dict) -> dict:
-    """Детектор инъекций: правила по тексту, затем дешёвая модель по помеченным фрагментам."""
+async def retrieve_activity(args: dict) -> dict:
+    """Поиск, маскирование ПД и детектор инъекций (дешёвая модель по помеченным фрагментам)."""
+    query = rag_pipeline.base_query(args["document_ids"], args.get("hint"))
     async with _heartbeating():
-        screened, report, excluded_texts = await rag_pipeline.screen_context(
-            Context.from_dict(context)
-        )
-    return {"context": screened.to_dict(), "report": report, "excluded_texts": excluded_texts}
+        context, guard = await rag_pipeline.retrieve_context_async(query, args["document_ids"])
+    return {
+        "query": query,
+        "context": context,
+        "guard": guard.model_dump(),
+        "excluded_texts": guard.excluded_texts,
+        "needs_review": guard.needs_review,
+        "escalation_reason": guard.escalation_reason,
+    }
 
 
 @activity.defn
-def output_filter_activity(args: dict) -> dict:
-    """Фильтр выхода: контакты и следы инструкций в карточке (быстрый шаг, без модели)."""
-    card, findings = rag_pipeline.filter_output(
-        CardDraft.model_validate(args["card"]), args.get("excluded_texts") or []
+async def rag_card_activity(args: dict) -> dict:
+    """Генерация карточки по контексту: проверка ссылок, критик, фильтр выхода."""
+    guard = GuardReport.model_validate(
+        {**args["guard"], "excluded_texts": args.get("excluded_texts") or []}
     )
-    return {"card": card.model_dump(), "findings": findings}
+    try:
+        async with _heartbeating():
+            card, attempts, verdict, status, guard = await rag_pipeline.generate_from_context(
+                args["query"], args["context"], guard
+            )
+    except rag_pipeline.SourceValidationError as exc:
+        # выдуманные ссылки не лечатся повтором шага: карточку получит человек
+        raise ApplicationError(str(exc), non_retryable=True) from exc
+    except Exception as exc:
+        raise _to_application_error(exc) from exc
+    return {
+        "card": card.model_dump(),
+        "attempts": attempts,
+        "verdict": verdict,
+        "status": status,
+        "guard": guard.model_dump(),
+    }

@@ -6,13 +6,13 @@ from psycopg.rows import dict_row
 from app.core.db import connection
 
 _SELECT = """
-    SELECT d.id, d.filename, d.status, d.reason, d.pages,
-           (SELECT count(*) FROM chunks c WHERE c.document_id = d.id) AS chunks
+    SELECT d.id, d.filename, d.kind, d.status, d.reason, d.pages,
+           (SELECT count(*) FROM chunks c WHERE c.doc_id = d.id) AS chunks
       FROM documents d
 """
 
 
-def create(filename: str, content_hash: str, size_bytes: int) -> tuple[dict, bool]:
+def create(filename: str, content_hash: str, size_bytes: int, kind: str) -> tuple[dict, bool]:
     """Создаёт документ. Тот же файл (по хэшу) возвращает первую запись.
 
     Возвращает (документ, создан_ли_сейчас).
@@ -21,12 +21,12 @@ def create(filename: str, content_hash: str, size_bytes: int) -> tuple[dict, boo
     with connection() as conn, conn.cursor(row_factory=dict_row) as cur:
         cur.execute(
             """
-            INSERT INTO documents (id, filename, content_hash, size_bytes)
-            VALUES (%s, %s, %s, %s)
+            INSERT INTO documents (id, filename, content_hash, size_bytes, kind)
+            VALUES (%s, %s, %s, %s, %s)
             ON CONFLICT (content_hash) DO NOTHING
             RETURNING id
             """,
-            (doc_id, filename, content_hash, size_bytes),
+            (doc_id, filename, content_hash, size_bytes, kind),
         )
         created = cur.fetchone() is not None
         cur.execute(_SELECT + " WHERE d.content_hash = %s", (content_hash,))

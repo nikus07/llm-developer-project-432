@@ -35,8 +35,8 @@ def test_field_cannot_be_in_both_lists():
 def test_nested_seo_and_sources_are_parsed():
     card = CardDraft(
         **_card(
-            seo={"meta_title": "t", "keywords": ["блендер"]},
-            sources=[{"field": "Мощность", "quote": "Мощность 800 Вт"}],
+            seo={"title": "t", "keywords": ["блендер"]},
+            sources=[{"chunk_id": "d1-0", "field": "Мощность", "quote": "Мощность 800 Вт"}],
         )
     )
     assert card.seo.keywords == ["блендер"]

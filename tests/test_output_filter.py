@@ -29,7 +29,7 @@ def test_phone_in_generated_text_is_found_and_masked():
     assert not result.clean
     assert {"kind": "персональные данные: телефон", "field": "description"} in result.findings
     assert "900 123-45-67" not in result.card.description
-    assert "[ТЕЛЕФОН_1]" in result.card.description
+    assert "[PHONE_1]" in result.card.description
 
 
 def test_email_and_inn_in_any_field_are_found():

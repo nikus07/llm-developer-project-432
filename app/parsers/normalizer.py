@@ -1,6 +1,9 @@
 """Нормализация текста документа: колонтитулы, переносы, лигатуры, пробелы."""
 import math
 import re
+from dataclasses import replace
+
+from app.parsers.models import Block
 
 _LIGATURES = {
     "ﬀ": "ff",
@@ -82,19 +85,29 @@ def repeated_line_keys(pages: list[list[str]]) -> set[str]:
     return {key for key, count in seen.items() if count >= threshold}
 
 
-def normalize(pages: list[str] | str) -> list[str] | str:
-    """Нормализация документа по страницам: колонтитулы, переносы, лигатуры, пробелы.
+def normalize(blocks: list[Block]) -> list[Block]:
+    """Нормализация блоков документа: колонтитулы, переносы, лигатуры, пробелы.
 
-    Список страниц — на выходе список очищенных страниц без колонтитулов (строки у края,
-    повторяющиеся на страницах, и строки с номером страницы). Одна строка — просто clean_text.
+    Колонтитул виден только на фоне других страниц, поэтому его убирают здесь, а не при
+    разборе: строки у края страницы, повторяющиеся на страницах, и строки с номером страницы.
+    Таблицы остаются как есть.
     """
-    if isinstance(pages, str):
-        return clean_text(pages)
-    lines_by_page = [page.split("\n") for page in pages]
+    by_page: dict[int, list[str]] = {}
+    for block in blocks:
+        if block.kind == "text":
+            by_page.setdefault(block.page, []).extend(block.content.split("\n"))
+    lines_by_page = [by_page[page] for page in sorted(by_page)]
     repeated = repeated_line_keys(lines_by_page)
     for lines in lines_by_page:
         repeated |= {line_key(ln) for ln in edge_lines(lines) if is_page_marker(ln)}
-    return [
-        clean_text("\n".join(ln for ln in lines if line_key(ln) not in repeated))
-        for lines in lines_by_page
-    ]
+
+    result: list[Block] = []
+    for block in blocks:
+        if block.kind != "text":
+            result.append(block)
+            continue
+        kept = [ln for ln in block.content.split("\n") if line_key(ln) not in repeated]
+        text = clean_text("\n".join(kept))
+        if text:
+            result.append(replace(block, content=text))
+    return result

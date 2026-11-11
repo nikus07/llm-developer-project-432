@@ -9,6 +9,22 @@ from app.schemas.search import SearchHit
 router = APIRouter(tags=["search"])
 
 
+def _hit(row: dict) -> dict:
+    meta = row.get("metadata") or {}
+    return {
+        "chunk_id": row["chunk_id"],
+        "doc_id": row["doc_id"],
+        "document": row["filename"],
+        "page": meta.get("page"),
+        "section": meta.get("section"),
+        "kind": meta.get("kind"),
+        "articul": meta.get("articul"),
+        "brand": meta.get("brand"),
+        "text": row["text"],
+        "score": float(row["score"]),
+    }
+
+
 @router.get("/search", response_model=list[SearchHit])
 async def search_chunks(
     q: Annotated[str, Query(min_length=1, description="Поисковый запрос")],
@@ -25,11 +41,12 @@ async def search_chunks(
     filters = {
         "document": document,
         "document_id": document_id,
-        "article": article,
+        "articul": article,
         "brand": brand,
         "page": page,
     }
     # эмбеддинг запроса и база блокируют — выносим из цикла событий
-    return await run_in_threadpool(
+    rows = await run_in_threadpool(
         search, q, mode=mode, limit=limit, min_score=min_score, filters=filters
     )
+    return [_hit(row) for row in rows]

@@ -1,5 +1,5 @@
 """docx: параграфы и таблицы; заголовок — граница секции."""
-from pathlib import Path
+from io import BytesIO
 
 from docx import Document
 from docx.table import Table
@@ -7,7 +7,7 @@ from docx.text.paragraph import Paragraph
 
 from app.parsers.models import Block, DocumentRejected
 from app.parsers.normalizer import clean_text
-from app.parsers.table import cell_text, row_to_block
+from app.parsers.table import table_block
 
 _DEFAULT_SECTION = "Документ"
 _HEADING_PREFIXES = ("heading", "заголовок", "title")
@@ -27,9 +27,9 @@ def _page_breaks(paragraph: Paragraph) -> int:
     return max(explicit, rendered)
 
 
-def parse_docx(path: Path) -> list[Block]:
+def parse_docx(data: bytes) -> list[Block]:
     try:
-        document = Document(str(path))
+        document = Document(BytesIO(data))
     except Exception as exc:
         raise DocumentRejected(f"не удалось открыть docx: {exc}") from exc
 
@@ -43,7 +43,7 @@ def parse_docx(path: Path) -> list[Block]:
         nonlocal buffer
         text = clean_text("\n".join(buffer))
         if text:
-            blocks.append(Block(kind="text", text=text, page=buffer_page, section=section))
+            blocks.append(Block(kind="text", content=text, page=buffer_page, section=section))
         buffer = []
 
     for child in document.element.body.iterchildren():
@@ -62,13 +62,10 @@ def parse_docx(path: Path) -> list[Block]:
         elif child.tag == f"{_W}tbl":
             flush()
             table = Table(child, document)
-            rows = [[cell_text(cell.text) for cell in row.cells] for row in table.rows]
-            if len(rows) < 2:
-                continue
-            for values in rows[1:]:
-                block = row_to_block(rows[0], values, page=page, section=section)
-                if block is not None:
-                    blocks.append(block)
+            rows = [[cell.text for cell in row.cells] for row in table.rows]
+            block = table_block(rows, page=page, section=section)
+            if block is not None:
+                blocks.append(block)
             buffer_page = page
     flush()
     return blocks

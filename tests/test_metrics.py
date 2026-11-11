@@ -2,7 +2,7 @@ import asyncio
 
 import pytest
 
-from app.rag.context import Context, ContextItem
+from app.rag.context import build_context
 from app.schemas import CardDraft, JudgeVerdict, SourceRef
 from evals import judge as judge_module
 from evals.judge import judge_prompt
@@ -85,9 +85,9 @@ def test_missing_fields_recall_and_precision():
 def test_citation_ok_when_source_really_contains_the_value():
     card = _card(
         {"Мощность": "800 Вт"},
-        sources=[SourceRef(field="Мощность", chunk_id=1, quote="x", page=1)],
+        sources=[SourceRef(field="Мощность", chunk_id="c1", quote="x", page=1)],
     )
-    report = citation_report(card, {1: "Параметр\nМощность: 800 Вт\nВес: 1,2 кг"})
+    report = citation_report(card, {"c1": "Параметр\nМощность: 800 Вт\nВес: 1,2 кг"})
     assert report["card_ok"] and report["sources_valid"] == 1
 
 
@@ -95,29 +95,29 @@ def test_citation_catches_correct_value_taken_from_the_wrong_fragment():
     """Характеристика верная, но взята не оттуда, куда указывает ссылка."""
     card = _card(
         {"Мощность": "800 Вт"},
-        sources=[SourceRef(field="Мощность", chunk_id=2, quote="x")],
+        sources=[SourceRef(field="Мощность", chunk_id="c2", quote="x")],
     )
-    texts = {1: "Мощность: 800 Вт", 2: "Гарантия 24 месяца с даты продажи"}
+    texts = {"c1": "Мощность: 800 Вт", 2: "Гарантия 24 месяца с даты продажи"}
     report = citation_report(card, texts)
     assert not report["card_ok"] and report["sources_valid"] == 0
 
 
 def test_citation_fails_for_uncited_characteristic():
     card = _card({"Мощность": "800 Вт", "Вес": "1,2 кг"},
-                 sources=[SourceRef(field="Мощность", chunk_id=1, quote="x")])
-    report = citation_report(card, {1: "Мощность: 800 Вт Вес: 1,2 кг"})
+                 sources=[SourceRef(field="Мощность", chunk_id="c1", quote="x")])
+    report = citation_report(card, {"c1": "Мощность: 800 Вт Вес: 1,2 кг"})
     assert not report["card_ok"] and report["uncited"] == ["Вес"]
 
 
 def test_citation_probes_check_page_and_text():
     card = _card(
         {"Мощность": "800 Вт"},
-        sources=[SourceRef(field="Мощность", chunk_id=1, quote="x", page=1)],
+        sources=[SourceRef(field="Мощность", chunk_id="c1", quote="x", page=1)],
     )
     probes = {"Мощность": {"page": 1, "text_contains": "800 Вт"}}
-    assert citation_report(card, {1: "Мощность: 800 Вт"}, probes)["probes"] == "1/1"
+    assert citation_report(card, {"c1": "Мощность: 800 Вт"}, probes)["probes"] == "1/1"
     wrong_page = {"Мощность": {"page": 2, "text_contains": "800 Вт"}}
-    assert citation_report(card, {1: "Мощность: 800 Вт"}, wrong_page)["probes"] == "0/1"
+    assert citation_report(card, {"c1": "Мощность: 800 Вт"}, wrong_page)["probes"] == "0/1"
 
 
 # --- судья ---
@@ -131,11 +131,20 @@ def test_judge_score_is_computed_by_code_from_named_keys():
 
 
 def test_judge_prompt_contains_fragments_and_card_but_not_hints():
-    context = Context(items=[ContextItem(7, "a.pdf", 1, "Характеристики", "Мощность: 800 Вт")])
+    context = build_context(
+        [
+            {
+                "chunk_id": "c7",
+                "filename": "a.pdf",
+                "text": "Мощность: 800 Вт",
+                "metadata": {"page": 1, "section": "Характеристики"},
+            }
+        ]
+    )
     card = _card({"Мощность": "800 Вт"}, confidence=0.9, missing_fields=["цвет"],
-                 sources=[SourceRef(field="Мощность", chunk_id=7, quote="x")])
+                 sources=[SourceRef(field="Мощность", chunk_id="c7", quote="x")])
     prompt = judge_prompt(context, card)
-    assert '<source id="7"' in prompt and "Мощность: 800 Вт" in prompt  # фрагменты
+    assert "[c7 | a.pdf" in prompt and "Мощность: 800 Вт" in prompt  # фрагменты
     assert '"characteristics"' in prompt and '"title"' in prompt  # карточка
     assert "chunk_id" not in prompt and "confidence" not in prompt  # подсказок нет
 
@@ -148,7 +157,7 @@ def test_judge_returns_structured_verdict_from_substituted_model(monkeypatch):
         return '```json\n{"unsupported_characteristics": ["Цвет"], "comment": "цвета нет"}\n```'
 
     monkeypatch.setattr("app.services.structured.run_agent", fake_run)
-    context = Context(items=[ContextItem(7, "a.pdf", 1, "С", "Мощность: 800 Вт")])
+    context = "[c7 | a.pdf | стр. 1 | С]\nМощность: 800 Вт"
     verdict = asyncio.run(judge_module.judge_card(context, _card({"Цвет": "белый"})))
 
     assert verdict.unsupported_characteristics == ["Цвет"]
@@ -156,10 +165,10 @@ def test_judge_returns_structured_verdict_from_substituted_model(monkeypatch):
 
 
 def test_citation_page_is_taken_from_database_not_from_model():
-    sources = [SourceRef(field="Мощность", chunk_id=1, quote="x")]
+    sources = [SourceRef(field="Мощность", chunk_id="c1", quote="x")]
     card = _card({"Мощность": "800 Вт"}, sources=sources)
     probes = {"Мощность": {"page": 2, "text_contains": "800 Вт"}}
-    report = citation_report(card, {1: "Мощность: 800 Вт"}, probes, chunk_pages={1: 2})
+    report = citation_report(card, {"c1": "Мощность: 800 Вт"}, probes, chunk_pages={"c1": 2})
     assert report["probes"] == "1/1"  # у ссылки модели страницы нет, а во фрагменте она есть
 
 
@@ -167,12 +176,12 @@ def test_source_for_description_is_checked_by_quote():
     card = _card(
         {"Мощность": "800 Вт"},
         sources=[
-            SourceRef(field="Мощность", chunk_id=1, quote="x"),
-            SourceRef(field="description", chunk_id=1, quote="Металлическая ножка"),
+            SourceRef(field="Мощность", chunk_id="c1", quote="x"),
+            SourceRef(field="description", chunk_id="c1", quote="Металлическая ножка"),
         ],
     )
     text = "Мощность: 800 Вт. Металлическая ножка из нержавеющей стали."
-    assert citation_report(card, {1: text})["card_ok"]
+    assert citation_report(card, {"c1": text})["card_ok"]
     invented = card.model_copy(update={"sources": [
-        card.sources[0], SourceRef(field="description", chunk_id=1, quote="Титановая ножка")]})
-    assert citation_report(invented, {1: text})["sources_valid"] == 1
+        card.sources[0], SourceRef(field="description", chunk_id="c1", quote="Титановая ножка")]})
+    assert citation_report(invented, {"c1": text})["sources_valid"] == 1

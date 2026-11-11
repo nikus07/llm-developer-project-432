@@ -44,7 +44,7 @@ PostgreSQL (pgvector). Ни внешних API, ни платных токено
 ```bash
 git clone https://github.com/nikus07/llm-developer-project-432.git
 cd llm-developer-project-432
-uv sync --frozen            # make setup
+uv sync --frozen            # зависимости; `make setup` делает это и применяет миграции
 ```
 
 Зависимости ставятся строго из `uv.lock`, одной командой. На Linux torch берётся
@@ -131,7 +131,7 @@ verifying → awaiting_confirmation | needs_review → approved | rejected | fai
 
 | | |
 |---|---|
-| `make setup` | поставить зависимости из `uv.lock` |
+| `make setup` | поставить зависимости из `uv.lock` и применить миграции (база должна быть поднята: `make infra`) |
 | `make infra` | поднять PostgreSQL и Temporal |
 | `make migrate` | применить миграции из `db/migrations/` |
 | `make api` · `make temporal-worker` | приложение и воркер процессов |

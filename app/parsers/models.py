@@ -1,4 +1,4 @@
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Literal
 
 
@@ -8,22 +8,14 @@ class DocumentRejected(Exception):
 
 @dataclass
 class Block:
-    """Структурная единица документа: абзацы секции или одна строка таблицы."""
+    """Структурная единица документа: абзацы секции или таблица.
 
-    kind: Literal["text", "row"]
-    text: str
+    Для таблицы `rows` — ячейки по строкам (первая строка — заголовки колонок), а
+    `content` — те же строки текстом, по одной на строку таблицы.
+    """
+
+    kind: Literal["text", "table"]
+    content: str
     page: int
     section: str
-    article: str | None = None
-    brand: str | None = None
-
-
-@dataclass
-class Chunk:
-    idx: int
-    kind: str
-    text: str
-    page: int
-    section: str
-    article: str | None = None
-    brand: str | None = None
+    rows: list[list[str]] = field(default_factory=list)

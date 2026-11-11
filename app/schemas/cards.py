@@ -20,21 +20,27 @@ class SupplierFacts(BaseModel):
 
 
 class SourceRef(BaseModel):
-    """Откуда взято значение: поле карточки и фрагмент документа."""
+    """Откуда взято значение: фрагмент документа, на который ссылается карточка."""
 
-    field: str = Field(description="Поле или характеристика карточки")
-    quote: str = Field(description="Фрагмент документа, на который опирается значение")
-    document: str | None = Field(default=None, description="Имя документа, если известно")
-    chunk_id: int | None = Field(
-        default=None, description="id фрагмента из атрибута id тега source"
-    )
-    page: int | None = Field(default=None, description="Страница; заполняет приложение")
+    chunk_id: str = Field(description="id фрагмента из заголовка источника в контексте")
+    doc_id: str = ""
+    page: int | None = None
+    score: float | None = None
+    # необязательные подробности: какая характеристика опирается на источник и откуда выдержка
+    field: str = Field(default="", description="Характеристика, для которой источник")
+    quote: str = Field(default="", description="Дословная выдержка из источника")
     section: str | None = Field(default=None, description="Секция; заполняет приложение")
+    document: str | None = Field(default=None, description="Имя файла; заполняет приложение")
+
+    @field_validator("chunk_id", mode="before")
+    @classmethod
+    def _chunk_id_as_text(cls, value):
+        return str(value) if isinstance(value, int) else value
 
 
 class Seo(BaseModel):
-    meta_title: str = ""
-    meta_description: str = ""
+    title: str = ""
+    description: str = ""
     keywords: list[str] = Field(default_factory=list)
 
 
@@ -56,7 +62,7 @@ class CardDraft(BaseModel):
         description="Чего в документах не нашлось; такие поля нельзя выдумывать",
     )
     confidence: float = Field(
-        default=0.0, ge=0.0, le=1.0, description="Уверенность в карточке от 0 до 1"
+        default=1.0, ge=0.0, le=1.0, description="Уверенность в карточке от 0 до 1"
     )
 
     @field_validator("title")

@@ -1,7 +1,7 @@
 from pydantic import BaseModel, Field
 
 
-class InjectionVerdict(BaseModel):
+class InjectionAnswer(BaseModel):
     """Вердикт дешёвой модели: пытается ли фрагмент манипулировать инструкциями ассистента."""
 
     is_injection: bool = Field(description="true — во фрагменте есть попытка манипуляции")

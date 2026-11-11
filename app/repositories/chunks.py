@@ -1,81 +1,63 @@
-"""Таблица chunks: фрагменты документов."""
+"""Таблица chunks: фрагменты документов, векторы и поиск.
+
+Фрагмент — словарь {"chunk_id", "doc_id", "text", "metadata", "filename", "score"}.
+Функции поиска и чтения по идентификаторам получают соединение первым аргументом.
+"""
 from psycopg.rows import dict_row
+from psycopg.types.json import Jsonb
 
+from app.core.config import settings
 from app.core.db import connection
-from app.parsers.models import Chunk
+from app.rag.embedder import embed_query
+
+# --- запись и чтение ----------------------------------------------------------------
 
 
-def replace_for_document(document_id: str, document: str, chunks: list[Chunk]) -> None:
+def replace_for_document(doc_id: str, chunks: list[dict]) -> None:
     """Заменяет фрагменты документа целиком: повторный разбор не плодит дублей."""
     with connection() as conn, conn.transaction():
-        conn.execute("DELETE FROM chunks WHERE document_id = %s", (document_id,))
+        conn.execute("DELETE FROM chunks WHERE doc_id = %s", (doc_id,))
         with conn.cursor() as cur:
             cur.executemany(
-                """
-                INSERT INTO chunks
-                    (document_id, document, idx, kind, text, page, section, article, brand)
-                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
-                """,
+                "INSERT INTO chunks (id, doc_id, ordinal, text, metadata) "
+                "VALUES (%s, %s, %s, %s, %s)",
                 [
-                    (
-                        document_id,
-                        document,
-                        c.idx,
-                        c.kind,
-                        c.text,
-                        c.page,
-                        c.section,
-                        c.article,
-                        c.brand,
-                    )
+                    (c["chunk_id"], doc_id, c["ordinal"], c["text"], Jsonb(c["metadata"]))
                     for c in chunks
                 ],
             )
 
 
-def list_for_document(document_id: str) -> list[dict]:
+def list_for_document(doc_id: str) -> list[dict]:
     with connection() as conn, conn.cursor(row_factory=dict_row) as cur:
         cur.execute(
             """
-            SELECT idx, kind, text, page, section, article, brand, document
-              FROM chunks WHERE document_id = %s ORDER BY idx
+            SELECT c.id AS chunk_id, c.doc_id, c.ordinal, c.text, c.metadata, d.filename
+              FROM chunks c JOIN documents d ON d.id = c.doc_id
+             WHERE c.doc_id = %s ORDER BY c.ordinal
             """,
-            (document_id,),
+            (doc_id,),
         )
         return cur.fetchall()
 
 
-# --- векторы и поиск ---------------------------------------------------------------
-
-_FILTER_COLUMNS = {
-    "document": "c.document = %({name})s",
-    "document_id": "c.document_id = %({name})s",
-    "document_ids": "c.document_id = ANY(%({name})s)",
-    "section": "c.section = %({name})s",
-    "page": "c.page = %({name})s",
-    "article": "c.article ILIKE '%%' || %({name})s || '%%'",
-    "brand": "c.brand ILIKE '%%' || %({name})s || '%%'",
-}
-
-_HIT_COLUMNS = (
-    "c.id, c.document_id, c.document, c.idx, c.kind, c.page, c.section, "
-    "c.article, c.brand, c.text"
-)
-
-
-def get_many(chunk_ids: list[int]) -> dict[int, dict]:
-    """Фрагменты по id: проверка, что ссылка указывает на существующий фрагмент."""
+def get_chunks_by_ids(conn, chunk_ids: list[str]) -> dict[str, dict]:
+    """Фрагменты по идентификаторам: проверка, что ссылка указывает на существующий."""
     if not chunk_ids:
         return {}
-    with connection() as conn, conn.cursor(row_factory=dict_row) as cur:
+    with conn.cursor(row_factory=dict_row) as cur:
         cur.execute(
             """
-            SELECT id, document_id, document, page, section, text
-              FROM chunks WHERE id = ANY(%s)
+            SELECT c.id AS chunk_id, c.doc_id, c.text, c.metadata, d.filename
+              FROM chunks c JOIN documents d ON d.id = c.doc_id
+             WHERE c.id = ANY(%s)
             """,
             (list(chunk_ids),),
         )
-        return {row["id"]: row for row in cur.fetchall()}
+        return {row["chunk_id"]: row for row in cur.fetchall()}
+
+
+# --- векторы ------------------------------------------------------------------------
 
 
 def vector_literal(vector: list[float]) -> str:
@@ -87,20 +69,20 @@ def count_without_embeddings() -> int:
         return conn.execute("SELECT count(*) FROM chunks WHERE embedding IS NULL").fetchone()[0]
 
 
-def list_without_embeddings(limit: int, document_id: str | None = None) -> list[dict]:
+def list_without_embeddings(limit: int, doc_id: str | None = None) -> list[dict]:
     with connection() as conn, conn.cursor(row_factory=dict_row) as cur:
         cur.execute(
             """
-            SELECT id, text FROM chunks
-             WHERE embedding IS NULL AND (%s::text IS NULL OR document_id = %s)
-             ORDER BY id LIMIT %s
+            SELECT id AS chunk_id, text FROM chunks
+             WHERE embedding IS NULL AND (%s::text IS NULL OR doc_id = %s)
+             ORDER BY doc_id, ordinal LIMIT %s
             """,
-            (document_id, document_id, limit),
+            (doc_id, doc_id, limit),
         )
         return cur.fetchall()
 
 
-def write_embeddings(rows: list[tuple[int, list[float]]]) -> None:
+def write_embeddings(rows: list[tuple[str, list[float]]]) -> None:
     """Векторы пачкой, одной транзакцией."""
     with connection() as conn, conn.transaction(), conn.cursor() as cur:
         cur.executemany(
@@ -109,62 +91,96 @@ def write_embeddings(rows: list[tuple[int, list[float]]]) -> None:
         )
 
 
-def _filters(filters: dict | None) -> tuple[str, dict]:
-    """Условия по метаданным: только известные ключи, значения — параметрами."""
+# --- поиск --------------------------------------------------------------------------
+
+_FILTER_SQL = {
+    "document": "d.filename = %({name})s",
+    "section": "c.metadata ->> 'section' = %({name})s",
+    "page": "c.metadata ->> 'page' = %({name})s::text",
+    "articul": "c.metadata ->> 'articul' ILIKE '%%' || %({name})s || '%%'",
+    "brand": "c.metadata ->> 'brand' ILIKE '%%' || %({name})s || '%%'",
+}
+
+_HIT_COLUMNS = "c.id AS chunk_id, c.doc_id, c.text, c.metadata, d.filename"
+
+
+def _where(doc_ids: list[str] | None, filters: dict | None) -> tuple[str, dict]:
+    """Условия по документам и метаданным: только известные ключи, значения — параметрами."""
     clauses: list[str] = []
     params: dict = {}
+    if doc_ids is not None:
+        clauses.append("c.doc_id = ANY(%(f_doc_ids)s)")
+        params["f_doc_ids"] = list(doc_ids)
     for name, value in (filters or {}).items():
-        if value is None or name not in _FILTER_COLUMNS:
+        if value is None or name not in _FILTER_SQL:
             continue
         key = f"f_{name}"
-        clauses.append(_FILTER_COLUMNS[name].format(name=key))
+        clauses.append(_FILTER_SQL[name].format(name=key))
         params[key] = value
     return "".join(f" AND {clause}" for clause in clauses), params
 
 
+def _threshold(value: float | None) -> float:
+    return settings.search_min_score if value is None else value
+
+
 def search_vector(
-    query_vector: list[float], *, limit: int, min_score: float, filters: dict | None = None
+    conn,
+    query: str,
+    top_k: int = 5,
+    threshold: float | None = None,
+    doc_ids: list[str] | None = None,
+    filters: dict | None = None,
 ) -> list[dict]:
     """Ближайшие по косинусу; оценка — близость (1 − расстояние), ниже порога не отдаём."""
-    where, params = _filters(filters)
-    params |= {"q": vector_literal(query_vector), "limit": limit, "min_score": min_score}
+    where, params = _where(doc_ids, filters)
+    params |= {
+        "q": vector_literal(embed_query(query)),
+        "limit": top_k,
+        "min_score": _threshold(threshold),
+    }
     sql = f"""
         SELECT {_HIT_COLUMNS}, 1 - (c.embedding <=> %(q)s::vector) AS score
-          FROM chunks c
+          FROM chunks c JOIN documents d ON d.id = c.doc_id
          WHERE c.embedding IS NOT NULL
            AND 1 - (c.embedding <=> %(q)s::vector) >= %(min_score)s {where}
          ORDER BY c.embedding <=> %(q)s::vector
          LIMIT %(limit)s
     """
-    with connection() as conn, conn.cursor(row_factory=dict_row) as cur:
+    with conn.cursor(row_factory=dict_row) as cur:
         cur.execute(sql, params)
         return cur.fetchall()
 
 
-def search_keyword(query_text: str, *, limit: int, filters: dict | None = None) -> list[dict]:
+def search_fts(
+    conn,
+    query: str,
+    top_k: int = 5,
+    doc_ids: list[str] | None = None,
+    filters: dict | None = None,
+) -> list[dict]:
     """Обычное ранжирование полнотекстового поиска: слова запроса должны быть в тексте."""
-    where, params = _filters(filters)
-    params |= {"text": query_text, "limit": limit}
+    where, params = _where(doc_ids, filters)
+    params |= {"text": query, "limit": top_k}
     sql = f"""
         SELECT {_HIT_COLUMNS}, ts_rank_cd(c.tsv, q.query) AS score
-          FROM chunks c, plainto_tsquery('russian', %(text)s) AS q(query)
+          FROM chunks c JOIN documents d ON d.id = c.doc_id,
+               plainto_tsquery('russian', %(text)s) AS q(query)
          WHERE c.tsv @@ q.query {where}
          ORDER BY score DESC, c.id
          LIMIT %(limit)s
     """
-    with connection() as conn, conn.cursor(row_factory=dict_row) as cur:
+    with conn.cursor(row_factory=dict_row) as cur:
         cur.execute(sql, params)
         return cur.fetchall()
 
 
 def search_hybrid(
-    query_vector: list[float],
-    query_text: str,
-    *,
-    limit: int,
-    min_score: float,
-    candidates: int,
-    rrf_k: int,
+    conn,
+    query: str,
+    top_k: int = 5,
+    threshold: float | None = None,
+    doc_ids: list[str] | None = None,
     filters: dict | None = None,
 ) -> list[dict]:
     """Слияние по обратным позициям (RRF): вклад каждого списка — 1 / (k + позиция).
@@ -172,21 +188,21 @@ def search_hybrid(
     Фрагмент, найденный обоими списками, получает два вклада и оказывается выше.
     Порог действует на векторный список: мусор до слияния не доходит.
     """
-    where, params = _filters(filters)
+    where, params = _where(doc_ids, filters)
     params |= {
-        "q": vector_literal(query_vector),
-        "text": query_text,
-        "limit": limit,
-        "min_score": min_score,
-        "candidates": candidates,
-        "k": rrf_k,
+        "q": vector_literal(embed_query(query)),
+        "text": query,
+        "limit": top_k,
+        "min_score": _threshold(threshold),
+        "candidates": settings.search_candidates,
+        "k": settings.rrf_k,
     }
     sql = f"""
         WITH vec AS (
             SELECT id, ROW_NUMBER() OVER (ORDER BY dist) AS rnk
               FROM (
                   SELECT c.id, c.embedding <=> %(q)s::vector AS dist
-                    FROM chunks c
+                    FROM chunks c JOIN documents d ON d.id = c.doc_id
                    WHERE c.embedding IS NOT NULL
                      AND 1 - (c.embedding <=> %(q)s::vector) >= %(min_score)s {where}
                    ORDER BY dist
@@ -197,7 +213,8 @@ def search_hybrid(
             SELECT id, ROW_NUMBER() OVER (ORDER BY rank DESC, id) AS rnk
               FROM (
                   SELECT c.id, ts_rank_cd(c.tsv, tq.query) AS rank
-                    FROM chunks c, plainto_tsquery('russian', %(text)s) AS tq(query)
+                    FROM chunks c JOIN documents d ON d.id = c.doc_id,
+                         plainto_tsquery('russian', %(text)s) AS tq(query)
                    WHERE c.tsv @@ tq.query {where}
                    ORDER BY rank DESC, c.id
                    LIMIT %(candidates)s
@@ -209,10 +226,10 @@ def search_hybrid(
              GROUP BY id
         )
         SELECT {_HIT_COLUMNS}, f.score
-          FROM fused f JOIN chunks c ON c.id = f.id
+          FROM fused f JOIN chunks c ON c.id = f.id JOIN documents d ON d.id = c.doc_id
          ORDER BY f.score DESC, c.id
          LIMIT %(limit)s
     """
-    with connection() as conn, conn.cursor(row_factory=dict_row) as cur:
+    with conn.cursor(row_factory=dict_row) as cur:
         cur.execute(sql, params)
         return cur.fetchall()

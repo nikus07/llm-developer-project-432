@@ -7,7 +7,6 @@
 import asyncio
 import hashlib
 import json
-import re
 import uuid
 from concurrent.futures import ThreadPoolExecutor
 
@@ -21,18 +20,17 @@ from temporalio.worker import Worker
 from app.core import db
 from app.core.config import settings
 from app.core.migrate import migrate
-from app.parsers.models import Chunk
-from app.rag import retrieval
+from app.rag.context import context_chunk_ids
 from app.repositories import chunks as chunks_repo
 from app.repositories import documents as documents_repo
 from app.repositories import jobs as jobs_repo
-from app.schemas import CardDraft, CritiqueReport, SourceRef, SupplierFacts
-from app.schemas.guard import InjectionVerdict
-from app.services import structured
+from app.schemas import CardDraft, CritiqueReport, SourceRef
+from app.schemas.guard import InjectionAnswer
+from app.services import rag_pipeline, structured
 from app.temporal import activities as acts
 from app.temporal.workflows import GenerateWorkflow
 
-DIM = settings.embedding_dim
+DIM = settings.embed_dim
 THRESHOLD = 0.6
 
 
@@ -79,59 +77,65 @@ def env():
 def _indexed_document(env, name: str, texts: dict[str, str], vectors_from: int = 0) -> dict:
     """Документ в состоянии indexed с заранее заданными фрагментами и векторами."""
     digest = hashlib.sha256(uuid.uuid4().bytes).hexdigest()
-    document, _ = documents_repo.create(name, digest, 1)
+    document, _ = documents_repo.create(name, digest, 1, "pdf")
     env["documents"].append(document["id"])
+    doc_id = document["id"]
     chunks = [
-        Chunk(i, "text", text, 1 + i // 2, f"Секция {i}") for i, text in enumerate(texts.values())
+        {
+            "chunk_id": f"{doc_id}-{i}",
+            "ordinal": i,
+            "text": text,
+            "metadata": {
+                "doc_id": doc_id,
+                "page": 1 + i // 2,
+                "section": f"Секция {i}",
+                "kind": "text",
+            },
+        }
+        for i, text in enumerate(texts.values())
     ]
-    chunks_repo.replace_for_document(document["id"], name, chunks)
-    rows = chunks_repo.list_without_embeddings(100, document["id"])
+    chunks_repo.replace_for_document(doc_id, chunks)
+    rows = chunks_repo.list_without_embeddings(100, doc_id)
     vectors = [_basis(vectors_from + i) for i in range(len(rows))]
-    chunks_repo.write_embeddings([(r["id"], v) for r, v in zip(rows, vectors, strict=True)])
-    documents_repo.set_status(document["id"], "indexed", pages=2)
-    by_key = dict(zip(texts, [r["id"] for r in rows], strict=True))
-    return {"id": document["id"], "chunks": by_key}
+    pairs = zip((r["chunk_id"] for r in rows), vectors, strict=True)
+    chunks_repo.write_embeddings(list(pairs))
+    documents_repo.set_status(doc_id, "indexed", pages=2)
+    by_key = dict(zip(texts, [r["chunk_id"] for r in rows], strict=True))
+    return {"id": doc_id, "chunks": by_key}
 
 
 class FakeModel:
     """Подмена клиента модели: сценарий генератора, остальные роли — по умолчанию."""
 
-    def __init__(self, generator: list[str], facts: SupplierFacts | None = None,
-                 verdicts: list[str] | None = None, detector=None):
-        self.generator = generator  # "valid" | "fabricated" | "unseen"
-        self.facts = facts or SupplierFacts(
-            product_name="Блендер МиксерПро 800",
-            characteristics={"Мощность": "800 Вт", "Гарантия": "24 месяца"},
-            missing_fields=["цвет"],
-        )
+    def __init__(self, generator: list[str], verdicts: list[str] | None = None, detector=None):
+        self.generator = generator  # "valid" | "fabricated" | "unseen" | "leaky" | "gaps"
         self.verdicts = verdicts or ["approve"] * 5
         self.calls: list[str] = []
         self.prompts: list[tuple[str, str]] = []
-        self.ids: dict[str, int] = {}  # ключ фрагмента -> chunk_id
-        self.unseen_id = 0
-        self.detector = detector  # prompt -> InjectionVerdict (или исключение)
+        self.ids: dict[str, str] = {}  # ключ фрагмента -> chunk_id
+        self.unseen_id = ""
+        self.detector = detector  # prompt -> InjectionAnswer (или исключение)
 
     async def __call__(self, agent, prompt):
         self.calls.append(agent.name)
         self.prompts.append((agent.name, prompt))
-        if agent.name == "Extractor":
-            return self.facts
         if agent.name == "InjectionDetector":
             return self.detector(prompt)
-        if agent.name == "RagCritic":
+        if agent.name == "Critic":
             return CritiqueReport(verdict=self.verdicts.pop(0), issues=["замечание"])
         assert agent.name == "RagGenerator", agent.name
         mode = self.generator.pop(0)
-        context_ids = {int(i) for i in re.findall(r'<source id="(\d+)"', prompt)}
+        context_ids = context_chunk_ids(prompt)
         power, warranty = self.ids["power"], self.ids["warranty"]
         assert {power, warranty} <= context_ids  # оба фрагмента нашлись и поданы в промпт
         if mode == "fabricated":
-            power = 999_999_999  # такого фрагмента нет в базе
+            power = "deadbeef0000"  # такого фрагмента нет в базе
         elif mode == "unseen":
             power = self.unseen_id  # есть в базе, но в контексте его не было
         description = "Погружной блендер на 800 Вт с гарантией 24 месяца."
         if mode == "leaky":
             description += " Звоните +7 900 123-45-67, пишите promo@spammlot.example."
+        gaps = ["цвет", "вес", "страна-производитель"] if mode == "gaps" else ["цвет"]
         return CardDraft(
             title="МиксерПро 800 — блендер",
             description=description,
@@ -141,6 +145,7 @@ class FakeModel:
                 SourceRef(field="Мощность", chunk_id=power, quote="Мощность: 800 Вт"),
                 SourceRef(field="Гарантия", chunk_id=warranty, quote="Гарантия 24 месяца"),
             ],
+            missing_fields=gaps,
             confidence=0.9,
         )
 
@@ -169,12 +174,7 @@ async def _run_workflow(env, document_ids, fake: FakeModel, hint="блендер
                 acts.set_status_activity,
                 acts.documents_state_activity,
                 acts.retrieve_activity,
-                acts.rag_extract_activity,
-                acts.rag_generate_activity,
-                acts.verify_references_activity,
-                acts.rag_critique_activity,
-                acts.screen_activity,
-                acts.output_filter_activity,
+                acts.rag_card_activity,
             ],
             activity_executor=executor,
         ):
@@ -199,7 +199,8 @@ def patched(monkeypatch):
         fake.ids = doc["chunks"]
         fake.unseen_id = other["chunks"]["x"]
         monkeypatch.setattr(structured, "run_agent", fake)
-        monkeypatch.setattr(retrieval, "embed_query", lambda text: _basis(0))
+        monkeypatch.setattr(rag_pipeline, "run_agent", fake)
+        monkeypatch.setattr(chunks_repo, "embed_query", lambda text: _basis(0))
         return fake
 
     return install
@@ -227,16 +228,17 @@ def test_full_scenario_ends_approved_with_references_to_existing_fragments(env, 
         assert source.page is not None and source.section
     assert card.missing_fields == ["цвет"]
     assert card.confidence < 1.0
-    assert fake.calls == ["Extractor", "RagGenerator", "RagCritic"]
-    stored_ids = chunks_repo.get_many([s.chunk_id for s in card.sources])
-    assert len(stored_ids) == 2  # ссылки ведут на существующие фрагменты
+    assert fake.calls == ["RagGenerator", "Critic"]
+    with db.connection() as conn:
+        stored = chunks_repo.get_chunks_by_ids(conn, [s.chunk_id for s in card.sources])
+    assert len(stored) == 2  # ссылки ведут на существующие фрагменты
 
 
 def test_context_contains_only_selected_documents(env, docs, patched):
     doc, other = docs
     fake = patched(FakeModel(["valid"]), doc, other)
     asyncio.run(_run_workflow(env, [doc["id"]], fake))
-    prompt = dict(fake.prompts[1:2])["RagGenerator"]
+    prompt = dict(fake.prompts[:1])["RagGenerator"]
     assert "Мощность: 800 Вт" in prompt
     assert "KTL-1700" not in prompt  # фрагмент чужого документа в контекст не попал
 
@@ -249,29 +251,27 @@ def test_fabricated_reference_goes_to_rework_and_then_passes(env, docs, patched)
 
     assert waiting["status"] == "awaiting_confirmation"
     assert fake.calls.count("RagGenerator") == 2  # переделка
-    assert fake.calls.count("RagCritic") == 1  # критик видел только карточку с верными ссылками
+    assert fake.calls.count("Critic") == 1  # критик видел только карточку с верными ссылками
     rework_prompt = [p for n, p in fake.prompts if n == "RagGenerator"][1]
-    assert "999999999" in rework_prompt and "нет в базе" in rework_prompt  # текст ошибки
+    assert "deadbeef0000" in rework_prompt and "нет в базе" in rework_prompt  # текст ошибки
 
 
-def test_fabricated_reference_twice_goes_to_human(env, docs, patched):
+def test_fabricated_reference_every_time_goes_to_human(env, docs, patched):
     doc, other = docs
-    fake = patched(FakeModel(["fabricated", "fabricated", "valid"]), doc, other)
+    fake = patched(FakeModel(["fabricated"] * 3), doc, other)
 
-    waiting, final = asyncio.run(_run_workflow(env, [doc["id"]], fake, decision="reject"))
+    waiting, _ = asyncio.run(_run_workflow(env, [doc["id"]], fake, decision=None))
 
     assert waiting["status"] == "needs_review"
     assert "Ссылки не прошли проверку" in waiting["error"]
-    assert fake.calls.count("RagGenerator") == 2  # третьей попытки нет: сразу к человеку
-    assert "RagCritic" not in fake.calls  # с выдуманной ссылкой до критика не доходит
-    assert final["status"] == "rejected"
-    card = CardDraft.model_validate(waiting["result"])
-    assert all(s.chunk_id != 999_999_999 for s in card.sources)  # выдумка из результата убрана
+    assert fake.calls.count("RagGenerator") == 3  # все попытки исчерпаны
+    assert "Critic" not in fake.calls  # с выдуманной ссылкой до критика не доходит
+    assert waiting["result"] is None  # выдуманную карточку клиенту не отдаём
 
 
 def test_existing_fragment_that_model_never_saw_is_rejected(env, docs, patched):
     doc, other = docs
-    fake = patched(FakeModel(["unseen", "unseen"]), doc, other)
+    fake = patched(FakeModel(["unseen"] * 3), doc, other)
 
     waiting, _ = asyncio.run(_run_workflow(env, [doc["id"]], fake, decision=None))
 
@@ -281,12 +281,7 @@ def test_existing_fragment_that_model_never_saw_is_rejected(env, docs, patched):
 
 def test_incomplete_specification_lists_real_gaps_and_low_confidence(env, docs, patched):
     doc, other = docs
-    facts = SupplierFacts(
-        product_name="Блендер",
-        characteristics={"Мощность": "800 Вт"},
-        missing_fields=["цвет", "вес", "страна-производитель"],
-    )
-    fake = patched(FakeModel(["valid"], facts=facts), doc, other)
+    fake = patched(FakeModel(["gaps"]), doc, other)
 
     waiting, _ = asyncio.run(_run_workflow(env, [doc["id"]], fake, decision=None))
 
@@ -311,7 +306,7 @@ def test_critic_remarks_trigger_rework_then_approval(env, docs, patched):
 def test_rejected_document_is_skipped_with_note(env, docs, patched):
     doc, other = docs
     digest = hashlib.sha256(uuid.uuid4().bytes).hexdigest()
-    scan, _ = documents_repo.create("boiler_scan.pdf", digest, 1)
+    scan, _ = documents_repo.create("boiler_scan.pdf", digest, 1, "pdf")
     env["documents"].append(scan["id"])
     documents_repo.set_status(scan["id"], "failed", reason="в pdf нет текстового слоя")
     fake = patched(FakeModel(["valid"]), doc, other)
@@ -326,7 +321,7 @@ def test_rejected_document_is_skipped_with_note(env, docs, patched):
 def test_job_without_any_ready_document_fails_with_reason(env, patched, docs):
     doc, other = docs
     digest = hashlib.sha256(uuid.uuid4().bytes).hexdigest()
-    scan, _ = documents_repo.create("boiler_scan.pdf", digest, 1)
+    scan, _ = documents_repo.create("boiler_scan.pdf", digest, 1, "pdf")
     env["documents"].append(scan["id"])
     documents_repo.set_status(scan["id"], "failed", reason="скан без текстового слоя")
     fake = patched(FakeModel([]), doc, other)
@@ -355,7 +350,7 @@ INJECTION_TEXT = (
 
 
 def _says(is_injection: bool):
-    return lambda prompt: InjectionVerdict(is_injection=is_injection, reason="тест")
+    return lambda prompt: InjectionAnswer(is_injection=is_injection, reason="тест")
 
 
 def _unavailable(prompt):
@@ -386,7 +381,7 @@ def test_injection_fragment_is_excluded_and_card_is_clean(env, patched):
     assert [e["chunk_id"] for e in excluded] == [doc["chunks"]["terms"]]
     assert excluded[0]["level"] == "model" and excluded[0]["rules"]
     assert fake.calls.count("InjectionDetector") == 1  # модель спрашивали только по помеченному
-    assert waiting["report"]["escalated"] is False
+    assert waiting["report"]["needs_review"] is False
 
 
 def test_clean_document_is_not_blocked_and_detector_is_not_called(env, docs, patched):
@@ -424,7 +419,7 @@ def test_too_many_suspicious_fragments_send_document_to_human(env, patched):
     assert waiting["status"] == "needs_review"
     assert "подозрительных фрагментов 3" in waiting["error"]
     assert waiting["result"] is None  # карточку не строили
-    assert waiting["report"]["escalated"] is True
+    assert waiting["report"]["needs_review"] is True
     assert "RagGenerator" not in fake.calls
 
 
@@ -441,7 +436,7 @@ def test_contacts_are_masked_before_model_and_before_logs(env, patched):
     for raw in RAW_CONTACTS:
         assert raw not in prompts  # ни в промпте (то есть ни в чужом API)
         assert raw not in logged  # ни в логах
-    assert "[ТЕЛЕФОН_1]" in prompts and "[EMAIL_1]" in prompts and "[ИНН_1]" in prompts
+    assert "[PHONE_1]" in prompts and "[EMAIL_1]" in prompts and "[INN_1]" in prompts
     assert "1157746123450" in prompts  # ОГРН — не персональные данные, документ цел
     assert waiting["report"]["masked"] == {"телефон": 1, "email": 1, "инн": 1}
     assert waiting["status"] == "awaiting_confirmation"
@@ -459,5 +454,5 @@ def test_output_filter_catches_contacts_in_generated_card(env, docs, patched):
     assert "Фильтр выхода" in waiting["error"]
     description = waiting["result"]["description"]
     assert "900 123-45-67" not in description and "spammlot" not in description  # замаскировано
-    kinds = {f["kind"] for f in waiting["report"]["output_filter"]["findings"]}
-    assert {"персональные данные: телефон", "персональные данные: email"} <= kinds
+    issues = " ".join(waiting["report"]["output_issues"])
+    assert "персональные данные: телефон" in issues and "персональные данные: email" in issues

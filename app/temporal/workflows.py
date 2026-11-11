@@ -14,19 +14,13 @@ with workflow.unsafe.imports_passed_through():
         generate_activity,
         index_document_activity,
         mark_document_failed_activity,
-        output_filter_activity,
         process_document_activity,
-        rag_critique_activity,
-        rag_extract_activity,
-        rag_generate_activity,
+        rag_card_activity,
         retrieve_activity,
-        screen_activity,
         set_status_activity,
-        verify_references_activity,
     )
 
 MAX_ATTEMPTS = 3
-MAX_REFERENCE_FAILURES = 2  # выдуманная ссылка: одна переделка, при повторе — к человеку
 _DOCUMENTS_WAIT = timedelta(minutes=15)
 _DOCUMENTS_POLL = timedelta(seconds=2)
 _RETRIEVE_TIMEOUT = timedelta(minutes=10)  # первая загрузка модели эмбеддингов
@@ -288,83 +282,53 @@ class GenerateWorkflow:
             info = [f"пропущен документ {s['id']}: {s['reason']}" for s in docs["skipped"]]
 
             await self._set_status("retrieving")
-            context = await self._db_step(
-                retrieve_activity,
-                {"document_ids": docs["ready"], "hint": hint},
-                timeout=_RETRIEVE_TIMEOUT,
+            found = await self._llm_step(
+                retrieve_activity, {"document_ids": docs["ready"], "hint": hint}
             )
-            if not context["items"]:
-                raise ApplicationError("в выбранных документах ничего не найдено")
-
-            await self._set_status("screening")
-            screened = await self._llm_step(screen_activity, context)
-            context, guard = screened["context"], screened["report"]
-            excluded_texts = screened["excluded_texts"]
-            if guard["escalated"] or not context["items"]:
-                # много подозрительных фрагментов: документ целиком к человеку, с причиной
+            guard = found["guard"]
+            if found["needs_review"] or not found["context"].strip():
+                # много подозрительных фрагментов или нечего показать модели: к человеку
                 reason = (
-                    guard["escalation_reason"] or "в документе не осталось безопасных фрагментов"
+                    found["escalation_reason"] or "в документах не осталось безопасных фрагментов"
                 )
                 await self._set_status("needs_review", error=reason, report=guard)
                 return {"status": "needs_review", "attempts": 0}
 
             await self._set_status("generating", report=guard)
-            facts = await self._llm_step(rag_extract_activity, context)
-
-            feedback: list[str] = []
-            card: dict = {}
-            unresolved: list[str] = []
-            critic_approved = False
-            reference_failures = 0
-            while self._attempts < MAX_ATTEMPTS:
-                self._attempts += 1
-                await self._set_status("generating")
-                draft = await self._llm_step(
-                    rag_generate_activity,
-                    {"facts": facts, "context": context, "hint": hint, "feedback": feedback},
+            try:
+                done = await self._llm_step(
+                    rag_card_activity,
+                    {
+                        "query": found["query"],
+                        "context": found["context"],
+                        "guard": guard,
+                        "excluded_texts": found["excluded_texts"],
+                    },
                 )
-                await self._set_status("verifying")
-                checked = await self._db_step(
-                    verify_references_activity, {"card": draft, "context": context}
+            except ActivityError as exc:
+                if not isinstance(exc.cause, ApplicationError) or not exc.cause.non_retryable:
+                    raise
+                # выдуманные ссылки при всех попытках: карточку получает человек
+                await self._set_status(
+                    "needs_review", error="Ссылки не прошли проверку: " + str(exc.cause)[:400],
+                    report=guard,
                 )
-                card = checked["card"]  # только верные ссылки, с документом и страницей
-                if checked["issues"]:
-                    unresolved = checked["issues"]
-                    feedback = unresolved
-                    reference_failures += 1
-                    if reference_failures >= MAX_REFERENCE_FAILURES:
-                        break  # выдуманные ссылки при повторе — к человеку
-                    continue
-                unresolved = []
-                report = await self._llm_step(
-                    rag_critique_activity, {"facts": facts, "context": context, "card": card}
-                )
-                if report["verdict"] == "approve":
-                    critic_approved = True
-                    break
-                feedback = report["issues"]
-
+                return {"status": "needs_review", "attempts": 0}
+            self._attempts = done["attempts"]
+            card, guard = done["card"], done["guard"]
             review: list[str] = []
-            if unresolved:
-                review.append("Ссылки не прошли проверку: " + "; ".join(unresolved))
-            elif not critic_approved:
-                review.append("Проверка не одобрила карточку: " + "; ".join(feedback))
-            filtered = await self._db_step(
-                output_filter_activity, {"card": card, "excluded_texts": excluded_texts}
-            )
-            card = filtered["card"]
-            if filtered["findings"]:
-                kinds = sorted({f["kind"] for f in filtered["findings"]})
-                review.append("Фильтр выхода: " + "; ".join(kinds))
-            guard["output_filter"] = {"findings": filtered["findings"]}
-            confidence = float(card.get("confidence", 0.0))
-            if confidence < confidence_threshold:
+            if done["verdict"] != "approved":
+                review.append("Проверка не одобрила карточку")
+            if guard["output_issues"]:
+                review.append("Фильтр выхода: " + "; ".join(sorted(set(guard["output_issues"]))))
+            if done["status"] == "needs_review" and not review:
                 review.append(
-                    f"Уверенность {confidence:.2f} ниже порога {confidence_threshold:.2f}"
+                    f"Уверенность {float(card.get('confidence', 0.0)):.2f} "
+                    f"ниже порога {confidence_threshold:.2f} или нужна проверка человеком"
                 )
             notes = "; ".join([*review, *info]) or None
             await self._set_status(
-                "needs_review" if review else "awaiting_confirmation",
+                "needs_review" if review or done["status"] != "done" else "awaiting_confirmation",
                 result=card,
                 error=notes,
                 report=guard,

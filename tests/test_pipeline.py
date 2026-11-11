@@ -41,6 +41,7 @@ def fake_llm(monkeypatch):
         return result
 
     monkeypatch.setattr(structured, "run_agent", fake_run)
+    monkeypatch.setattr(pipeline, "run_agent", fake_run)
     return {"scenario": scenario, "calls": calls}
 
 
@@ -53,7 +54,7 @@ def test_extract_parses_json_with_markdown_fencing(fake_llm):
 
 def test_pipeline_approves_on_first_critique(fake_llm):
     fake_llm["scenario"] += [_facts(), _draft(), CritiqueReport(verdict="approve")]
-    draft, attempts, verdict = asyncio.run(pipeline.run_pipeline("текст"))
+    draft, attempts, verdict, _status = asyncio.run(pipeline.run_pipeline("текст"))
     assert verdict == "approved"
     assert attempts == 1
     assert draft.title.startswith("МиксерПро")
@@ -66,7 +67,7 @@ def test_pipeline_regenerates_until_max_attempts(fake_llm):
         _draft(), CritiqueReport(verdict="regenerate", issues=["много воды"]),
         _draft(), CritiqueReport(verdict="regenerate", issues=["всё ещё вода"]),
     ]
-    draft, attempts, verdict = asyncio.run(pipeline.run_pipeline("текст", max_attempts=3))
+    draft, attempts, verdict, _status = asyncio.run(pipeline.run_pipeline("текст", max_attempts=3))
     assert verdict == "rejected"
     assert attempts == 3
     assert draft is not None
@@ -80,7 +81,7 @@ def test_sparse_input_gives_missing_fields_and_low_confidence(fake_llm):
     overconfident.characteristics["гарантия"] = "12 мес."
     fake_llm["scenario"] += [sparse, overconfident, CritiqueReport(verdict="approve")]
 
-    draft, _attempts, _verdict = asyncio.run(pipeline.run_pipeline("скудный текст"))
+    draft, _attempts, _verdict, _status = asyncio.run(pipeline.run_pipeline("скудный текст"))
 
     assert draft.missing_fields == ["гарантия", "цвет"]
     assert "гарантия" not in draft.characteristics  # выдумка убрана

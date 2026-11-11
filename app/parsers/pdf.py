@@ -1,27 +1,20 @@
-"""pdf: текст постранично; крупный жирный шрифт — заголовок секции."""
+"""pdf: текст и таблицы постранично; крупный жирный шрифт — заголовок секции."""
 import re
-from pathlib import Path
+from io import BytesIO
 
 from pypdf import PdfReader
 
 from app.parsers.models import Block, DocumentRejected
-from app.parsers.normalizer import (
-    clean_text,
-    edge_lines,
-    is_page_marker,
-    line_key,
-    repeated_line_keys,
-)
-
-
-class PdfNoTextLayer(DocumentRejected):
-    """В pdf нет текстового слоя: скан. Распознавание текста не подключено."""
-
+from app.parsers.table import table_block
 
 _DEFAULT_SECTION = "Документ"
 _HEADING_MIN_SIZE = 11.0
 # в режиме layout колонки таблицы разделены широким просветом
 _COLUMN_GAP_RE = re.compile(r"\s{3,}")
+
+
+class PdfNoTextLayer(DocumentRejected):
+    """В pdf нет текстового слоя: скан. Распознавание текста не подключено."""
 
 
 def _heading_texts(page) -> set[str]:
@@ -37,22 +30,25 @@ def _heading_texts(page) -> set[str]:
     return found
 
 
-def _page_lines(page) -> list[str]:
+def _page_lines(page) -> list[list[str]]:
+    """Строки страницы, каждая — список колонок (одна колонка — обычный текст)."""
     layout = page.extract_text(extraction_mode="layout") or ""
-    lines: list[str] = []
+    rows: list[list[str]] = []
     for raw in layout.split("\n"):
         line = raw.strip()
-        if not line:
-            continue
-        columns = _COLUMN_GAP_RE.split(line)
-        # две колонки — пара «параметр: значение», чтобы строка читалась целиком
-        lines.append(f"{columns[0]}: {columns[1]}" if len(columns) == 2 else " ".join(columns))
-    return lines
+        if line:
+            rows.append(_COLUMN_GAP_RE.split(line))
+    return rows
 
 
-def parse_pdf(path: Path) -> list[Block]:
+def parse_pdf(data: bytes) -> list[Block]:
+    """pdf → блоки. Таблица — подряд идущие строки с одним числом колонок (две и больше).
+
+    Колонтитулы здесь не удаляются: их видно только на фоне других страниц, поэтому их
+    убирает нормализатор (parsers.normalizer.normalize).
+    """
     try:
-        reader = PdfReader(str(path))
+        reader = PdfReader(BytesIO(data))
         if reader.is_encrypted:
             raise DocumentRejected("pdf защищён паролем")
         pages = [(_page_lines(p), _heading_texts(p)) for p in reader.pages]
@@ -66,27 +62,45 @@ def parse_pdf(path: Path) -> list[Block]:
             "в pdf нет текстового слоя (похоже на скан): распознавание текста не подключено"
         )
 
-    repeated = repeated_line_keys([lines for lines, _ in pages])
-    for lines, _ in pages:
-        repeated |= {line_key(ln) for ln in edge_lines(lines) if is_page_marker(ln)}
     blocks: list[Block] = []
     section = _DEFAULT_SECTION
-    for number, (lines, headings) in enumerate(pages, start=1):
-        buffer: list[str] = []
+    text: list[str] = []
+    table: list[list[str]] = []
 
-        def flush(page_number: int, buf: list[str], title: str) -> None:
-            text = clean_text("\n".join(buf))
-            if text:
-                blocks.append(Block(kind="text", text=text, page=page_number, section=title))
+    def flush_text(page: int, title: str) -> None:
+        if text:
+            blocks.append(
+                Block(kind="text", content="\n".join(text), page=page, section=title)
+            )
+            text.clear()
 
-        for line in lines:
-            if line_key(line) in repeated:
-                continue  # колонтитул
+    def flush_table(page: int, title: str) -> None:
+        if len(table) >= 2:
+            block = table_block(table, page=page, section=title)
+            if block is not None:
+                blocks.append(block)
+        else:  # одна «табличная» строка — обычный текст
+            text.extend(" ".join(row) for row in table)
+        table.clear()
+
+    for number, (rows, headings) in enumerate(pages, start=1):
+        for row in rows:
+            if len(row) >= 2:
+                if table and len(row) != len(table[0]):
+                    flush_table(number, section)  # другое число колонок — новая таблица
+                if not table:
+                    flush_text(number, section)
+                table.append(row)
+                continue
+            if table:
+                flush_table(number, section)
+            line = " ".join(row)
             if line in headings:
-                flush(number, buffer, section)
-                buffer = []
+                flush_text(number, section)
                 section = line
             else:
-                buffer.append(line)
-        flush(number, buffer, section)
+                text.append(line)
+        if table:
+            flush_table(number, section)
+        flush_text(number, section)
     return blocks

@@ -41,7 +41,7 @@ class Settings(BaseSettings):
     # локальные эмбеддинги: модель, размерность (должна совпадать с миграцией 0004) и
     # префиксы из карточки модели — без них близость релевантных пар проседает
     embedding_model: str = "intfloat/multilingual-e5-base"
-    embedding_dim: int = 768
+    embed_dim: int = 768
     embedding_query_prefix: str = "query: "
     embedding_document_prefix: str = "passage: "
     embedding_batch_size: int = 32
@@ -67,7 +67,7 @@ class Settings(BaseSettings):
     ]
 
     # защита от инъекций: столько подозрительных фрагментов — документ целиком к человеку
-    injection_max_suspicious: int = 3
+    suspicious_chunk_limit: int = 3
 
     upload_dir: Path = Path(__file__).resolve().parents[2] / "uploads"
 

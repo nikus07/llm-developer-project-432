@@ -20,9 +20,9 @@ def _model():
     log.info("embedding_model_loading", model=settings.embedding_model)
     model = SentenceTransformer(settings.embedding_model, device="cpu")
     dim = model.get_embedding_dimension()
-    if dim != settings.embedding_dim:
+    if dim != settings.embed_dim:
         raise RuntimeError(
-            f"размерность модели {dim} не совпадает с embedding_dim={settings.embedding_dim}"
+            f"размерность модели {dim} не совпадает с embed_dim={settings.embed_dim}"
             " (и с колонкой vector в миграции)"
         )
     return model

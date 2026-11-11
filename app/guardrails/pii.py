@@ -1,13 +1,13 @@
 """Персональные данные: детекторы и маскирование до любого вызова модели и записи в лог.
 
-Найденное заменяется метками «[ТЕЛЕФОН_1]»; исходные значения нигде не сохраняются: ни в
+Найденное заменяется метками «[PHONE_1]»; исходные значения нигде не сохраняются: ни в
 отчёте, ни в списке найденного — только вид и метка.
 """
 import re
 from dataclasses import dataclass
 
 KIND_NAMES = {"phone": "телефон", "email": "email", "inn": "инн", "card": "карта"}
-_LABELS = {"phone": "ТЕЛЕФОН", "email": "EMAIL", "inn": "ИНН", "card": "КАРТА"}
+_LABELS = {"phone": "PHONE", "email": "EMAIL", "inn": "INN", "card": "CARD"}
 
 _EMAIL_RE = re.compile(r"[\w.+-]+@[\w-]+(?:\.[\w-]+)+")
 # 13–19 цифр с пробелами или дефисами; настоящая карта проходит проверку Луна
@@ -64,6 +64,16 @@ def luhn_valid(value: str) -> bool:
 
 
 @dataclass(frozen=True)
+class PiiEntity:
+    """Замаскированное: вид, метка и позиция в исходном тексте. Само значение не хранится."""
+
+    kind: str
+    label: str
+    start: int
+    end: int
+
+
+@dataclass(frozen=True)
 class PiiFinding:
     """Найденное: вид и позиция. Само значение не хранится."""
 
@@ -117,7 +127,8 @@ class PiiMasker:
             self._labels[key] = f"[{_LABELS[kind]}_{self._numbers[kind]}]"
         return self._labels[key]
 
-    def mask(self, text: str) -> str:
+    def mask_entities(self, text: str) -> tuple[str, list[PiiEntity]]:
+        """Замаскированный текст и найденное (вид, метка, позиция) в порядке появления."""
         findings = find_pii(text)
         # метки раздаём слева направо (первое найденное — «_1»), заменяем справа налево
         labels = [self._label(f.kind, text[f.start : f.end]) for f in findings]
@@ -126,7 +137,14 @@ class PiiMasker:
             result = result[: finding.start] + label + result[finding.end :]
             name = KIND_NAMES[finding.kind]
             self.counts[name] = self.counts.get(name, 0) + 1
-        return result
+        entities = [
+            PiiEntity(f.kind, label, f.start, f.end)
+            for f, label in zip(findings, labels, strict=True)
+        ]
+        return result, entities
+
+    def mask(self, text: str) -> str:
+        return self.mask_entities(text)[0]
 
 
 def mask_text(text: str) -> tuple[str, dict[str, int]]:
@@ -141,13 +159,6 @@ def contains_pii(text: str) -> bool:
     return bool(find_pii(text))
 
 
-def mask_pii(text: str) -> tuple[str, list[dict]]:
-    """Замаскированный текст и список найденного: вид и метка, без исходных значений."""
-    masker = PiiMasker()
-    findings = find_pii(text)
-    masked = masker.mask(text)
-    labels = re.findall(r"\[[A-ZА-ЯЁ]+_\d+\]", masked)
-    result = []
-    for finding, label in zip(findings, labels, strict=False):
-        result.append({"kind": finding.kind, "label": label})
-    return masked, result
+def mask_pii(text: str) -> tuple[str, list[PiiEntity]]:
+    """Замаскированный текст и список найденного: вид, метка и позиция, без исходных значений."""
+    return PiiMasker().mask_entities(text)

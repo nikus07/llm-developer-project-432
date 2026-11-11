@@ -23,7 +23,7 @@ def index_chunks(document_id: str | None = None, batch_size: int | None = None) 
         if not batch:
             break
         vectors = embed_documents([row["text"] for row in batch])
-        pairs = zip((row["id"] for row in batch), vectors, strict=True)
+        pairs = zip((row["chunk_id"] for row in batch), vectors, strict=True)
         chunks_repo.write_embeddings(list(pairs))
         done += len(batch)
         log.info("reindex_progress", done=done, total=total)

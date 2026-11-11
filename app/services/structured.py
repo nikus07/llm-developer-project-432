@@ -4,10 +4,11 @@ from typing import TypeVar
 
 from pydantic import BaseModel, ValidationError
 
-from app.agents.prompts import field_fixer_agent
+from app.agents.prompts import field_fixer_agent, generator_agent
 from app.core.config import settings
 from app.core.logging import get_logger
 from app.llm.client import run_agent
+from app.schemas import CardDraft
 from app.services.json_utils import LLMJsonError, parse_llm_json
 
 log = get_logger(__name__)
@@ -126,3 +127,54 @@ async def call_structured(
             "Верни исправленный JSON целиком, без пояснений.",
         )
     raise StructuredOutputError(model_cls.__name__)  # недостижимо: цикл выходит раньше
+
+
+class CardValidationError(StructuredOutputError):
+    """Карточку не удалось привести к контракту CardDraft за отведённое число попыток."""
+
+
+def parse_model(out, model_cls: type[T]) -> T:
+    """Ответ агента (объект или текст с JSON) → модель; иначе LLMJsonError/ValidationError."""
+    if isinstance(out, model_cls):
+        return out
+    return model_cls.model_validate(parse_llm_json(_as_text(out)))
+
+
+async def validate_or_retry(prompt: str, *, max_fixes: int | None = None) -> CardDraft:
+    """Генерация карточки с лечением: невалидный ответ уходит обратно в модель с ошибкой.
+
+    Не разобралось или не прошло валидацию — модель получает текст ошибки; если сломалось
+    одно-два поля, переделываются только они. Попыток не больше 1 + max_fixes, иначе
+    CardValidationError.
+    """
+    try:
+        return await call_structured(
+            generator_agent(), prompt, CardDraft, max_repairs=max_fixes, field_repair=True
+        )
+    except StructuredOutputError as exc:
+        raise CardValidationError(str(exc)) from exc
+
+
+async def regenerate_field(card: CardDraft, field: str, problem: str) -> CardDraft:
+    """Точечная переделка: модель правит одно поле, остальные поля карточки не трогаются."""
+    prompt = (
+        "Текущий черновик:\n"
+        + card.model_dump_json(indent=2)
+        + f"\n\nПоле «{field}» не прошло проверку: {problem}\n"
+        f"Исправь ТОЛЬКО поле {field}. "
+        f'Верни JSON вида {{"{field}": <новое значение>}} без пояснений.'
+    )
+    log.info("regenerate_field", field=field, problem=problem)
+    out = await run_agent(field_fixer_agent(), prompt)
+    fixed = parse_llm_json(_as_text(out))
+    if field not in fixed:
+        raise CardValidationError(f"в ответе нет поля {field!r}")
+    try:
+        return CardDraft.model_validate({**card.model_dump(), field: fixed[field]})
+    except ValidationError as exc:
+        raise CardValidationError(_describe(exc)) from exc
+
+
+def confidence_gate(card: CardDraft) -> str:
+    """Ниже порога уверенности карточка не «готова»: её смотрит человек."""
+    return "needs_review" if card.confidence < settings.confidence_threshold else "done"

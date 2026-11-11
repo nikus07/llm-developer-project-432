@@ -19,8 +19,9 @@ import structlog
 
 from app.agents import prompts
 from app.core.config import settings
-from app.core.db import close_pool, init_pool
+from app.core.db import close_pool, connection, init_pool
 from app.core.logging import setup_logging
+from app.rag.context import context_chunk_ids
 from app.repositories import chunks as chunks_repo
 from app.repositories import documents as documents_repo
 from app.repositories import llm_calls as llm_calls_repo
@@ -40,11 +41,18 @@ GOLDEN = DATA / "golden_cards.json"
 REPORTS = Path(__file__).resolve().parent / "reports"
 
 
+def _stored_chunks(ids: list[str]) -> dict:
+    with connection() as conn:
+        return chunks_repo.get_chunks_by_ids(conn, ids)
+
+
 def ensure_document(name: str) -> dict:
     """Документ из data/ в базе и в состоянии indexed (повторный прогон его переиспользует)."""
     content = (DATA / name).read_bytes()
     digest = hashlib.sha256(content).hexdigest()
-    document, created = documents_repo.create(name, digest, len(content))
+    document, created = documents_repo.create(
+        name, digest, len(content), documents_service.kind_of(name)
+    )
     if created:
         documents_service.save_upload(document["id"], name, content)
     if document["status"] == "failed":
@@ -82,16 +90,20 @@ async def evaluate_document(name: str, golden: dict, run_id: str) -> dict:
     started = time.perf_counter()
     product = golden["product"]
 
-    context = await asyncio.to_thread(rag_pipeline.retrieve_context, [document["id"]], product)
-    facts = await rag_pipeline.extract_facts(context)
-    draft = await rag_pipeline.generate_card(facts, context, product)
-    card, issues = await asyncio.to_thread(rag_pipeline.verify_references, draft, context)
+    context, guard = await rag_pipeline.retrieve_context_async(product, [document["id"]])
+    card, attempts, critic, status, guard = await rag_pipeline.generate_from_context(
+        product, context, guard
+    )
+    issues = guard.output_issues
+    draft = card
     verdict = await judge_card(context, draft)
 
-    cited = [s.chunk_id for s in draft.sources if s.chunk_id is not None]
-    stored = await asyncio.to_thread(chunks_repo.get_many, cited)
+    cited = [s.chunk_id for s in draft.sources]
+    stored = await asyncio.to_thread(_stored_chunks, cited)
     chunk_texts = {chunk_id: row["text"] for chunk_id, row in stored.items()}
-    chunk_pages = {chunk_id: row["page"] for chunk_id, row in stored.items()}
+    chunk_pages = {
+        chunk_id: (row["metadata"] or {}).get("page") for chunk_id, row in stored.items()
+    }
     citation = citation_report(draft, chunk_texts, golden.get("source_probes"), chunk_pages)
     recall, precision = missing_fields_scores(golden.get("missing_fields", []), card)
     cost = await asyncio.to_thread(llm_calls_repo.cost_for_job, label)
@@ -105,7 +117,7 @@ async def evaluate_document(name: str, golden: dict, run_id: str) -> dict:
         missing_recall=recall,
         missing_precision=precision,
         reference_issues=issues,
-        fragments=len(context.items),
+        fragments=len(context_chunk_ids(context)),
         cost_rub=str(cost["cost"]),
         llm_calls=cost["calls"],
         tokens=cost["input_tokens"] + cost["output_tokens"],

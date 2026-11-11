@@ -4,8 +4,7 @@ import json
 from typing import Literal
 
 from app.core.config import settings
-from app.core.db import close_pool, init_pool
-from app.rag.embedder import embed_query
+from app.core.db import close_pool, connection, init_pool
 from app.repositories import chunks as chunks_repo
 
 Mode = Literal["vector", "keyword", "hybrid"]
@@ -18,6 +17,7 @@ def search(
     limit: int | None = None,
     min_score: float | None = None,
     filters: dict | None = None,
+    doc_ids: list[str] | None = None,
 ) -> list[dict]:
     """Возвращает фрагменты с идентификатором, текстом, оценкой и метаданными.
 
@@ -25,23 +25,43 @@ def search(
     сумма вкладов RRF (hybrid) — сравнивать оценки разных режимов нельзя.
     """
     limit = limit or settings.search_limit
-    min_score = settings.search_min_score if min_score is None else min_score
+    filters = dict(filters or {})
+    document_id = filters.pop("document_id", None)
+    if document_id:
+        doc_ids = [*(doc_ids or []), document_id]
+    with connection() as conn:
+        if mode == "keyword":
+            return chunks_repo.search_fts(
+                conn, query, top_k=limit, doc_ids=doc_ids, filters=filters
+            )
+        if mode == "vector":
+            return chunks_repo.search_vector(
+                conn, query, top_k=limit, threshold=min_score, doc_ids=doc_ids, filters=filters
+            )
+        return chunks_repo.search_hybrid(
+            conn, query, top_k=limit, threshold=min_score, doc_ids=doc_ids, filters=filters
+        )
 
-    if mode == "keyword":
-        return chunks_repo.search_keyword(query, limit=limit, filters=filters)
 
-    vector = embed_query(query)
-    if mode == "vector":
-        return chunks_repo.search_vector(vector, limit=limit, min_score=min_score, filters=filters)
-    return chunks_repo.search_hybrid(
-        vector,
-        query,
-        limit=limit,
-        min_score=min_score,
-        candidates=settings.search_candidates,
-        rrf_k=settings.rrf_k,
-        filters=filters,
-    )
+def retrieve_chunks(query: str, doc_ids: list[str] | None = None) -> list[dict]:
+    """Фрагменты для генерации: основной запрос и по запросу на каждый аспект карточки."""
+    queries = [query, *(f"{query} {aspect}" for aspect in settings.generate_aspects)]
+    hits: list[dict] = []
+    seen: set[str] = set()
+    with connection() as conn:
+        for text in queries:
+            found = chunks_repo.search_hybrid(
+                conn,
+                text,
+                top_k=settings.generate_top_k,
+                threshold=settings.generate_min_score,
+                doc_ids=doc_ids,
+            )
+            for hit in found:
+                if hit["chunk_id"] not in seen:
+                    seen.add(hit["chunk_id"])
+                    hits.append(hit)
+    return hits
 
 
 def main() -> None:
@@ -62,7 +82,7 @@ def main() -> None:
             mode=args.mode,
             limit=args.limit,
             min_score=args.min_score,
-            filters={"document": args.document, "article": args.article, "brand": args.brand},
+            filters={"document": args.document, "articul": args.article, "brand": args.brand},
         )
     finally:
         close_pool()

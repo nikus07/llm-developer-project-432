@@ -67,7 +67,9 @@ def uploads(tmp_path, monkeypatch):
 
 def _register(name: str, content: bytes) -> dict:
     digest = hashlib.sha256(content + uuid.uuid4().bytes).hexdigest()
-    document, created = documents_repo.create(name, digest, len(content))
+    document, created = documents_repo.create(
+        name, digest, len(content), documents_service.kind_of(name)
+    )
     assert created
     _created_ids.append(document["id"])
     documents_service.save_upload(document["id"], name, content)
@@ -88,9 +90,9 @@ def test_supplied_files_are_parsed(live_db, uploads, name):
     assert stored["status"] == "parsed"
     assert stored["chunks"] == result["chunks"] > 0
     for chunk in chunks_repo.list_for_document(document["id"]):
-        assert chunk["document"] == name
-        assert chunk["page"] >= 1
-        assert chunk["section"]
+        assert chunk["filename"] == name
+        assert chunk["metadata"]["page"] >= 1
+        assert chunk["metadata"]["section"]
 
 
 def test_scanned_pdf_gets_rejection_with_reason(live_db, uploads):
@@ -112,7 +114,7 @@ def test_spec_chunks_read_as_article_parameter_value(live_db, uploads):
     rows = chunks_repo.list_for_document(document["id"])
     joined = "\n".join(r["text"] for r in rows)
     assert "KTL-1700: бренд КеттлПро" in joined
-    assert all(r["brand"] == "КеттлПро" for r in rows)
+    assert all(r["metadata"]["brand"] == "КеттлПро" for r in rows)
 
 
 def test_same_file_does_not_create_duplicate(live_db):
@@ -120,9 +122,9 @@ def test_same_file_does_not_create_duplicate(live_db):
     digest = hashlib.sha256(content).hexdigest()
     with db.connection() as conn:
         conn.execute("DELETE FROM documents WHERE content_hash = %s", (digest,))
-    first, created_first = documents_repo.create("a.pdf", digest, len(content))
+    first, created_first = documents_repo.create("a.pdf", digest, len(content), "pdf")
     _created_ids.append(first["id"])
-    second, created_second = documents_repo.create("copy-of-a.pdf", digest, len(content))
+    second, created_second = documents_repo.create("copy-of-a.pdf", digest, len(content), "pdf")
     assert created_first is True
     assert created_second is False
     assert second["id"] == first["id"]
