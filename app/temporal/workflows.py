@@ -14,11 +14,13 @@ with workflow.unsafe.imports_passed_through():
         generate_activity,
         index_document_activity,
         mark_document_failed_activity,
+        output_filter_activity,
         process_document_activity,
         rag_critique_activity,
         rag_extract_activity,
         rag_generate_activity,
         retrieve_activity,
+        screen_activity,
         set_status_activity,
         verify_references_activity,
     )
@@ -217,7 +219,12 @@ class GenerateWorkflow:
         return {"status": self._status, "attempts": self._attempts}
 
     async def _set_status(
-        self, status: str, *, result: dict | None = None, error: str | None = None
+        self,
+        status: str,
+        *,
+        result: dict | None = None,
+        error: str | None = None,
+        report: dict | None = None,
     ) -> None:
         self._status = status
         await workflow.execute_activity(
@@ -228,6 +235,7 @@ class GenerateWorkflow:
                 "attempts": self._attempts,
                 "result": result,
                 "error": error,
+                "report": report,
             },
             start_to_close_timeout=_DB_STEP_TIMEOUT,
             retry_policy=_STEP_RETRY,
@@ -288,7 +296,19 @@ class GenerateWorkflow:
             if not context["items"]:
                 raise ApplicationError("в выбранных документах ничего не найдено")
 
-            await self._set_status("generating")
+            await self._set_status("screening")
+            screened = await self._llm_step(screen_activity, context)
+            context, guard = screened["context"], screened["report"]
+            excluded_texts = screened["excluded_texts"]
+            if guard["escalated"] or not context["items"]:
+                # много подозрительных фрагментов: документ целиком к человеку, с причиной
+                reason = (
+                    guard["escalation_reason"] or "в документе не осталось безопасных фрагментов"
+                )
+                await self._set_status("needs_review", error=reason, report=guard)
+                return {"status": "needs_review", "attempts": 0}
+
+            await self._set_status("generating", report=guard)
             facts = await self._llm_step(rag_extract_activity, context)
 
             feedback: list[str] = []
@@ -329,6 +349,14 @@ class GenerateWorkflow:
                 review.append("Ссылки не прошли проверку: " + "; ".join(unresolved))
             elif not critic_approved:
                 review.append("Проверка не одобрила карточку: " + "; ".join(feedback))
+            filtered = await self._db_step(
+                output_filter_activity, {"card": card, "excluded_texts": excluded_texts}
+            )
+            card = filtered["card"]
+            if filtered["findings"]:
+                kinds = sorted({f["kind"] for f in filtered["findings"]})
+                review.append("Фильтр выхода: " + "; ".join(kinds))
+            guard["output_filter"] = {"findings": filtered["findings"]}
             confidence = float(card.get("confidence", 0.0))
             if confidence < confidence_threshold:
                 review.append(
@@ -336,7 +364,10 @@ class GenerateWorkflow:
                 )
             notes = "; ".join([*review, *info]) or None
             await self._set_status(
-                "needs_review" if review else "awaiting_confirmation", result=card, error=notes
+                "needs_review" if review else "awaiting_confirmation",
+                result=card,
+                error=notes,
+                report=guard,
             )
             await workflow.wait_condition(lambda: self._decision is not None)
 

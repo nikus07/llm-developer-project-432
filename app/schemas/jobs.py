@@ -20,6 +20,7 @@ class JobOut(BaseModel):
     attempts: int
     result: Card | None = None
     error: str | None = None
+    report: dict | None = None  # отчёт защиты: замаскировано и исключено
 
 
 class JobCost(BaseModel):

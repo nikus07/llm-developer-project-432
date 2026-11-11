@@ -67,6 +67,9 @@ class Settings(BaseSettings):
         "цена условия поставки",
     ]
 
+    # защита от инъекций: столько подозрительных фрагментов — документ целиком к человеку
+    injection_max_suspicious: int = 3
+
     upload_dir: Path = Path(__file__).resolve().parents[2] / "uploads"
 
 

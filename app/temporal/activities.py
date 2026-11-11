@@ -90,6 +90,7 @@ def set_status_activity(args: dict) -> None:
         attempts=args.get("attempts"),
         result=args.get("result"),
         error=args.get("error"),
+        report=args.get("report"),
     )
 
 
@@ -172,3 +173,22 @@ async def rag_critique_activity(args: dict) -> dict:
     except Exception as exc:
         raise _to_application_error(exc) from exc
     return report.model_dump()
+
+
+@activity.defn
+async def screen_activity(context: dict) -> dict:
+    """Детектор инъекций: правила по тексту, затем дешёвая модель по помеченным фрагментам."""
+    async with _heartbeating():
+        screened, report, excluded_texts = await rag_pipeline.screen_context(
+            Context.from_dict(context)
+        )
+    return {"context": screened.to_dict(), "report": report, "excluded_texts": excluded_texts}
+
+
+@activity.defn
+def output_filter_activity(args: dict) -> dict:
+    """Фильтр выхода: контакты и следы инструкций в карточке (быстрый шаг, без модели)."""
+    card, findings = rag_pipeline.filter_output(
+        Card.model_validate(args["card"]), args.get("excluded_texts") or []
+    )
+    return {"card": card.model_dump(), "findings": findings}

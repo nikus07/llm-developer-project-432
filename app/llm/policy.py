@@ -7,8 +7,8 @@ from app.core.config import settings
 Tier = Literal["main", "light"]
 
 # Служебные вызовы не требуют сильной модели: проверка черновика, правка одного поля,
-# судья. Основная генерация (извлечение фактов и сборка карточки) требует.
-LIGHT_AGENTS = frozenset({"Critic", "RagCritic", "FieldFixer", "Judge"})
+# судья, детектор инъекций. Основная генерация (извлечение фактов и сборка карточки) требует.
+LIGHT_AGENTS = frozenset({"Critic", "RagCritic", "FieldFixer", "Judge", "InjectionDetector"})
 
 
 def tier_for(agent_name: str) -> Tier:

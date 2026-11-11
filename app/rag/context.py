@@ -34,6 +34,7 @@ class Context:
     items: list[ContextItem] = field(default_factory=list)
     duplicates_removed: int = 0
     omitted: int = 0  # не поместились в предел размера
+    pii_masked: dict[str, int] = field(default_factory=dict)  # вид -> сколько замаскировано
 
     @property
     def chunk_ids(self) -> set[int]:
@@ -52,6 +53,7 @@ class Context:
             items=[ContextItem(**item) for item in data["items"]],
             duplicates_removed=data.get("duplicates_removed", 0),
             omitted=data.get("omitted", 0),
+            pii_masked=data.get("pii_masked", {}),
         )
 
 

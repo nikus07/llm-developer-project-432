@@ -6,7 +6,7 @@ from psycopg.types.json import Jsonb
 
 from app.core.db import connection
 
-_COLUMNS = "id, status, attempts, result, error"
+_COLUMNS = "id, status, attempts, result, error, report"
 
 
 def create(payload: dict, idempotency_key: str | None = None) -> tuple[dict, bool]:
@@ -47,6 +47,7 @@ def update_status(
     attempts: int | None = None,
     result: dict | None = None,
     error: str | None = None,
+    report: dict | None = None,
 ) -> None:
     """Короткое обращение к базе: соединение берётся на одну операцию."""
     with connection() as conn:
@@ -57,6 +58,7 @@ def update_status(
                    attempts   = COALESCE(%s, attempts),
                    result     = COALESCE(%s, result),
                    error      = COALESCE(%s, error),
+                   report     = COALESCE(%s, report),
                    updated_at = now()
              WHERE id = %s
             """,
@@ -65,6 +67,7 @@ def update_status(
                 attempts,
                 Jsonb(result) if result is not None else None,
                 error,
+                Jsonb(report) if report is not None else None,
                 job_id,
             ),
         )

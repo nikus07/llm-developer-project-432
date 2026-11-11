@@ -8,7 +8,11 @@ from pathlib import PurePath
 
 from app.agents.prompts import rag_critic_agent, rag_generator_agent
 from app.core.config import settings
+from app.core.config import settings as _settings  # noqa: F401
 from app.core.logging import get_logger
+from app.guardrails.injection import classify
+from app.guardrails.output import check_output
+from app.guardrails.pii import PiiMasker
 from app.rag.context import Context, build_context
 from app.rag.retrieval import search
 from app.repositories import chunks as chunks_repo
@@ -72,12 +76,20 @@ def retrieve_context(document_ids: list[str], hint: str | None) -> Context:
             if hit["id"] not in seen:
                 seen.add(hit["id"])
                 hits.append(hit)
+    # Первый рубеж: персональные данные маскируются на фрагменте при сборке контекста, до
+    # промпта, до детектора инъекций и до любой записи в лог. В базе остаётся исходный текст.
+    masker = PiiMasker()
+    for hit in hits:
+        hit["text"] = masker.mask(hit["text"])
+        hit["section"] = masker.mask(hit["section"])
     context = build_context(hits)
+    context.pii_masked = dict(masker.counts)
     log.info(
         "context_built",
         fragments=len(context.items),
         duplicates_removed=context.duplicates_removed,
         omitted=context.omitted,
+        pii_masked=context.pii_masked,
     )
     return context
 
@@ -179,3 +191,67 @@ async def critique_card(facts: SupplierFacts, context: Context, card: Card) -> C
     )
     log.info("rag_critique_start")
     return await call_structured(rag_critic_agent(), prompt, CritiqueReport)
+
+
+async def screen_context(context: Context) -> tuple[Context, dict, list[str]]:
+    """Второй рубеж: детектор инъекций. Подозрительные фрагменты — вон из контекста.
+
+    Возвращает (очищенный контекст, отчёт, тексты исключённых для фильтра выхода). Если
+    подозрительных не меньше порога из настроек или не осталось ни одного фрагмента —
+    документ целиком уходит к человеку с причиной. В отчёте нет исходных значений.
+    """
+    kept = []
+    excluded: list[dict] = []
+    excluded_texts: list[str] = []
+    model_checks = 0
+    for item in context.items:
+        result = await classify(item.text)
+        model_checks += result.model_called
+        if not result.suspicious:
+            kept.append(item)
+            continue
+        excluded_texts.append(item.text)
+        excluded.append(
+            {
+                "chunk_id": item.chunk_id,
+                "document": item.document,
+                "page": item.page,
+                "section": item.section,
+                "level": result.level,
+                "rules": result.rules,
+                "reason": result.reason,
+            }
+        )
+        log.warning("fragment_excluded", chunk_id=item.chunk_id, level=result.level,
+                    rules=result.rules)
+
+    escalation = None
+    if len(excluded) >= _settings.injection_max_suspicious:
+        escalation = (
+            f"подозрительных фрагментов {len(excluded)} "
+            f"(порог {_settings.injection_max_suspicious}): документ отправлен человеку"
+        )
+    elif not kept:
+        escalation = "все найденные фрагменты исключены как подозрительные"
+
+    report = {
+        "masked": context.pii_masked,
+        "checked_fragments": len(context.items),
+        "model_checks": model_checks,
+        "excluded": excluded,
+        "escalated": escalation is not None,
+        "escalation_reason": escalation,
+    }
+    screened = Context(
+        items=kept,
+        duplicates_removed=context.duplicates_removed,
+        omitted=context.omitted,
+        pii_masked=context.pii_masked,
+    )
+    return screened, report, excluded_texts
+
+
+def filter_output(card: Card, excluded_texts: list[str]) -> tuple[Card, list[dict]]:
+    """Третий рубеж: контакты и следы инструкций в сгенерированной карточке."""
+    checked = check_output(card, excluded_texts)
+    return checked.card, checked.findings
