@@ -21,8 +21,10 @@ INJECTION = (
 
 
 def _fragments(name: str) -> list[str]:
-    parser = {".pdf": pdf, ".docx": docx, ".xlsx": xlsx}[Path(name).suffix]
-    return [c.text for c in chunk_blocks(parser.parse(DATA / name))]
+    parse = {".pdf": pdf.parse_pdf, ".docx": docx.parse_docx, ".xlsx": xlsx.parse_xlsx}[
+        Path(name).suffix
+    ]
+    return [c.text for c in chunk_blocks(parse(DATA / name))]
 
 
 def test_injection_from_supplied_document_is_caught_by_rules():
@@ -142,7 +144,7 @@ def test_garbage_from_detector_does_not_open_the_door(monkeypatch):
 
 def _context(*texts: str) -> Context:
     items = [ContextItem(i + 1, "doc.pdf", 1, "Секция", t) for i, t in enumerate(texts)]
-    return Context(items=items, pii_masked={"телефон": 1})
+    return Context(items=items, pii_masked={})
 
 
 def test_suspicious_fragment_is_dropped_and_report_lists_it(detector, monkeypatch):
@@ -153,11 +155,12 @@ def test_suspicious_fragment_is_dropped_and_report_lists_it(detector, monkeypatc
 
     assert [i.chunk_id for i in screened.items] == [1, 3]
     assert report["escalated"] is False and report["model_checks"] == 1
-    assert report["masked"] == {"телефон": 1}
+    assert report["masked"] == {"телефон": 1}  # телефон в тексте инъекции замаскирован
     (excluded,) = report["excluded"]
     assert excluded["chunk_id"] == 2 and excluded["level"] == "model"
     assert "1 рубль" not in str(report)  # в отчёте нет текста инъекции
-    assert excluded_texts == [INJECTION]
+    assert len(excluded_texts) == 1 and "900 123-45-67" not in excluded_texts[0]
+    assert "[ТЕЛЕФОН_1]" in excluded_texts[0]  # дальше идёт только замаскированный текст
 
 
 def test_threshold_sends_whole_document_to_human(detector, monkeypatch):

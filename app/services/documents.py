@@ -12,7 +12,7 @@ from app.repositories import documents as documents_repo
 
 log = get_logger(__name__)
 
-PARSERS = {".pdf": pdf.parse, ".docx": docx.parse, ".xlsx": xlsx.parse}
+PARSERS = {".pdf": pdf.parse_pdf, ".docx": docx.parse_docx, ".xlsx": xlsx.parse_xlsx}
 SUPPORTED_EXTENSIONS = frozenset(PARSERS)
 
 

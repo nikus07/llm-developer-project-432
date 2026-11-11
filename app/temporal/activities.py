@@ -11,7 +11,7 @@ from app.llm.client import _retryable
 from app.rag.context import Context
 from app.repositories import documents as documents_repo
 from app.repositories import jobs as jobs_repo
-from app.schemas import Card, CritiqueReport, SupplierFacts
+from app.schemas import CardDraft, CritiqueReport, SupplierFacts
 from app.services import documents as documents_service
 from app.services import pipeline, rag_pipeline
 
@@ -68,7 +68,7 @@ async def generate_activity(args: dict) -> dict:
 @activity.defn
 async def critique_activity(args: dict) -> dict:
     facts = SupplierFacts.model_validate(args["facts"])
-    draft = Card.model_validate(args["draft"])
+    draft = CardDraft.model_validate(args["draft"])
     try:
         async with _heartbeating():
             report = await pipeline.critique(facts, draft)
@@ -156,7 +156,7 @@ async def rag_generate_activity(args: dict) -> dict:
 def verify_references_activity(args: dict) -> dict:
     """Проверка ссылок кодом: фрагмент есть в базе и был в контексте."""
     card, issues = rag_pipeline.verify_references(
-        Card.model_validate(args["card"]), Context.from_dict(args["context"])
+        CardDraft.model_validate(args["card"]), Context.from_dict(args["context"])
     )
     return {"card": card.model_dump(), "issues": issues}
 
@@ -168,7 +168,7 @@ async def rag_critique_activity(args: dict) -> dict:
             report: CritiqueReport = await rag_pipeline.critique_card(
                 SupplierFacts.model_validate(args["facts"]),
                 Context.from_dict(args["context"]),
-                Card.model_validate(args["card"]),
+                CardDraft.model_validate(args["card"]),
             )
     except Exception as exc:
         raise _to_application_error(exc) from exc
@@ -189,6 +189,6 @@ async def screen_activity(context: dict) -> dict:
 def output_filter_activity(args: dict) -> dict:
     """Фильтр выхода: контакты и следы инструкций в карточке (быстрый шаг, без модели)."""
     card, findings = rag_pipeline.filter_output(
-        Card.model_validate(args["card"]), args.get("excluded_texts") or []
+        CardDraft.model_validate(args["card"]), args.get("excluded_texts") or []
     )
     return {"card": card.model_dump(), "findings": findings}

@@ -1,5 +1,5 @@
 from app.rag.context import Context, build_context
-from app.schemas import Card, SourceRef
+from app.schemas import CardDraft, SourceRef
 from app.services.rag_pipeline import find_reference_issues
 
 
@@ -60,8 +60,8 @@ def test_context_roundtrips_through_dict():
 # --- проверка ссылок: чистая логика ---
 
 
-def _card(*sources: SourceRef, characteristics=None) -> Card:
-    return Card(
+def _card(*sources: SourceRef, characteristics=None) -> CardDraft:
+    return CardDraft(
         title="Блендер",
         description="Описание.",
         characteristics=characteristics or {},

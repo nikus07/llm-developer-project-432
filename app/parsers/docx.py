@@ -27,7 +27,7 @@ def _page_breaks(paragraph: Paragraph) -> int:
     return max(explicit, rendered)
 
 
-def parse(path: Path) -> list[Block]:
+def parse_docx(path: Path) -> list[Block]:
     try:
         document = Document(str(path))
     except Exception as exc:

@@ -57,6 +57,11 @@ class Context:
         )
 
 
+def context_chunk_ids(context: Context) -> set[int]:
+    """Идентификаторы фрагментов, которые были в контексте, поданном модели."""
+    return context.chunk_ids
+
+
 def _fingerprint(text: str) -> str:
     return _SPACES_RE.sub(" ", text).strip().casefold()
 

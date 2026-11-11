@@ -1,14 +1,14 @@
 """Модель в роли судьи: подтверждают ли источники утверждения карточки."""
 from app.agents.prompts import judge_agent
 from app.rag.context import Context
-from app.schemas import Card, JudgeVerdict
+from app.schemas import CardDraft, JudgeVerdict
 from app.services.structured import call_structured
 
 # судье нужны только утверждения; ссылки, уверенность и список недостающих его бы подсказали
 _HIDDEN = {"sources", "confidence", "missing_fields"}
 
 
-def judge_prompt(context: Context, card: Card) -> str:
+def judge_prompt(context: Context, card: CardDraft) -> str:
     """Фрагменты и карточка: судья сам сверяет значения с текстом источников."""
     return (
         "Источники:\n"
@@ -18,5 +18,5 @@ def judge_prompt(context: Context, card: Card) -> str:
     )
 
 
-async def judge_card(context: Context, card: Card) -> JudgeVerdict:
+async def judge_card(context: Context, card: CardDraft) -> JudgeVerdict:
     return await call_structured(judge_agent(), judge_prompt(context, card), JudgeVerdict)

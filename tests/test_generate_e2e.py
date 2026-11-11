@@ -26,7 +26,7 @@ from app.rag import retrieval
 from app.repositories import chunks as chunks_repo
 from app.repositories import documents as documents_repo
 from app.repositories import jobs as jobs_repo
-from app.schemas import Card, CritiqueReport, SourceRef, SupplierFacts
+from app.schemas import CardDraft, CritiqueReport, SourceRef, SupplierFacts
 from app.schemas.guard import InjectionVerdict
 from app.services import structured
 from app.temporal import activities as acts
@@ -132,7 +132,7 @@ class FakeModel:
         description = "Погружной блендер на 800 Вт с гарантией 24 месяца."
         if mode == "leaky":
             description += " Звоните +7 900 123-45-67, пишите promo@spammlot.example."
-        return Card(
+        return CardDraft(
             title="МиксерПро 800 — блендер",
             description=description,
             characteristics={"Мощность": "800 Вт", "Гарантия": "24 месяца"},
@@ -220,7 +220,7 @@ def test_full_scenario_ends_approved_with_references_to_existing_fragments(env, 
 
     assert waiting["status"] == "awaiting_confirmation"
     assert final["status"] == "approved"
-    card = Card.model_validate(waiting["result"])
+    card = CardDraft.model_validate(waiting["result"])
     assert {s.chunk_id for s in card.sources} == {doc["chunks"]["power"], doc["chunks"]["warranty"]}
     for source in card.sources:  # документ, страница, секция — из базы, не со слов модели
         assert source.document == "blender_passport.pdf"
@@ -265,7 +265,7 @@ def test_fabricated_reference_twice_goes_to_human(env, docs, patched):
     assert fake.calls.count("RagGenerator") == 2  # третьей попытки нет: сразу к человеку
     assert "RagCritic" not in fake.calls  # с выдуманной ссылкой до критика не доходит
     assert final["status"] == "rejected"
-    card = Card.model_validate(waiting["result"])
+    card = CardDraft.model_validate(waiting["result"])
     assert all(s.chunk_id != 999_999_999 for s in card.sources)  # выдумка из результата убрана
 
 
@@ -290,7 +290,7 @@ def test_incomplete_specification_lists_real_gaps_and_low_confidence(env, docs, 
 
     waiting, _ = asyncio.run(_run_workflow(env, [doc["id"]], fake, decision=None))
 
-    card = Card.model_validate(waiting["result"])
+    card = CardDraft.model_validate(waiting["result"])
     assert {"цвет", "вес", "страна-производитель"} <= set(card.missing_fields)
     assert card.confidence < THRESHOLD
     assert waiting["status"] == "needs_review"  # не «готово»: карточку ждёт человек
@@ -380,7 +380,7 @@ def test_injection_fragment_is_excluded_and_card_is_clean(env, patched):
     prompts = _all_prompts(fake, without_detector=True)  # генерация и проверка
     for trace in ("1 рубль", "900 123-45-67", "spammlot", "игнорируй все предыдущие"):
         assert trace not in prompts  # инъекция до генерации не дошла
-    card = Card.model_validate(waiting["result"])
+    card = CardDraft.model_validate(waiting["result"])
     assert "рубль" not in card.description and "900" not in card.description
     excluded = waiting["report"]["excluded"]
     assert [e["chunk_id"] for e in excluded] == [doc["chunks"]["terms"]]

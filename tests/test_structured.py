@@ -6,7 +6,7 @@ import pytest
 
 from app.agents.prompts import generator_agent
 from app.core.config import settings
-from app.schemas import Card
+from app.schemas import CardDraft
 from app.services import structured
 from app.services.structured import StructuredOutputError, call_structured
 
@@ -32,7 +32,7 @@ def fake_llm(monkeypatch):
 
 
 def _run(**kw):
-    return asyncio.run(call_structured(generator_agent(), "факты", Card, **kw))
+    return asyncio.run(call_structured(generator_agent(), "факты", CardDraft, **kw))
 
 
 def test_invalid_json_triggers_retry_with_error_in_prompt(fake_llm):
@@ -96,7 +96,7 @@ def test_without_field_repair_whole_answer_is_regenerated(fake_llm):
 
 def test_valid_model_instance_is_returned_as_is(fake_llm):
     calls, scenario = fake_llm
-    scenario.append(Card(**GOOD))
+    scenario.append(CardDraft(**GOOD))
     assert _run().title == "МиксерПро 800"
     assert len(calls) == 1
 

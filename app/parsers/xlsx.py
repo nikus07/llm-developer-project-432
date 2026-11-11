@@ -7,7 +7,7 @@ from app.parsers.models import Block, DocumentRejected
 from app.parsers.table import cell_text, row_to_block
 
 
-def parse(path: Path) -> list[Block]:
+def parse_xlsx(path: Path) -> list[Block]:
     try:
         workbook = load_workbook(path, read_only=True, data_only=True)
     except Exception as exc:

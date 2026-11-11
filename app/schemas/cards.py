@@ -38,7 +38,7 @@ class Seo(BaseModel):
     keywords: list[str] = Field(default_factory=list)
 
 
-class Card(BaseModel):
+class CardDraft(BaseModel):
     """Результат generator-агента: черновик карточки товара."""
 
     title: str = Field(min_length=1, description="Заголовок карточки")
@@ -73,7 +73,7 @@ class Card(BaseModel):
         return {k: v for k, v in value.items() if v is not None and str(v).strip()}
 
     @model_validator(mode="after")
-    def _field_is_not_in_both_lists(self) -> "Card":
+    def _field_is_not_in_both_lists(self) -> "CardDraft":
         both = sorted(set(self.characteristics) & set(self.missing_fields))
         if both:
             raise ValueError(

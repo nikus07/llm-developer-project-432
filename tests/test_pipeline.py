@@ -4,7 +4,7 @@ import asyncio
 import pytest
 
 from app.llm import client as llm_client
-from app.schemas import Card, CritiqueReport, SupplierFacts
+from app.schemas import CardDraft, CritiqueReport, SupplierFacts
 from app.services import pipeline, structured
 
 
@@ -16,8 +16,8 @@ def _facts(**kw) -> SupplierFacts:
     return SupplierFacts(**{**data, **kw})
 
 
-def _draft(title="МиксерПро 800 — блендер 800 Вт", confidence=0.9) -> Card:
-    return Card(
+def _draft(title="МиксерПро 800 — блендер 800 Вт", confidence=0.9) -> CardDraft:
+    return CardDraft(
         title=title,
         description="Погружной блендер с металлической ножкой и турбо-режимом.",
         characteristics={"Мощность": "800 Вт"},

@@ -2,7 +2,7 @@ from decimal import Decimal
 
 from pydantic import BaseModel, Field
 
-from app.schemas.cards import Card
+from app.schemas.cards import CardDraft
 
 
 class JobIn(BaseModel):
@@ -18,7 +18,7 @@ class JobOut(BaseModel):
     id: str
     status: str
     attempts: int
-    result: Card | None = None
+    result: CardDraft | None = None
     error: str | None = None
     report: dict | None = None  # отчёт защиты: замаскировано и исключено
 

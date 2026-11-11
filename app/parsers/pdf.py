@@ -45,7 +45,7 @@ def _page_lines(page) -> list[str]:
     return lines
 
 
-def parse(path: Path) -> list[Block]:
+def parse_pdf(path: Path) -> list[Block]:
     try:
         reader = PdfReader(str(path))
         if reader.is_encrypted:

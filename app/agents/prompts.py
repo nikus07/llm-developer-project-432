@@ -7,7 +7,7 @@ from pydantic import BaseModel
 from app.core.config import settings
 from app.llm.output import RawJsonOutput
 from app.llm.policy import model_for, tier_for
-from app.schemas import Card, CritiqueReport, JudgeVerdict, SupplierFacts
+from app.schemas import CardDraft, CritiqueReport, JudgeVerdict, SupplierFacts
 from app.schemas.guard import InjectionVerdict
 
 # Запас токенов под рассуждения: reasoning-модель тратит часть бюджета до ответа.
@@ -64,11 +64,11 @@ def generator_agent() -> Agent:
             "Данных нет — положи имя поля в missing_fields, а не сочиняй значение. "
             "Если даны замечания критика — исправь именно их. "
             "Никакого markdown, только валидный JSON.\n"
-            f"Схема ответа: {_schema_text(Card)}"
+            f"Схема ответа: {_schema_text(CardDraft)}"
         ),
         model=_model("Generator"),
         model_settings=_MODEL_SETTINGS,
-        output_type=RawJsonOutput(Card),
+        output_type=RawJsonOutput(CardDraft),
     )
 
 
@@ -136,11 +136,11 @@ def rag_generator_agent() -> Agent:
             "- confidence (number 0..1): чем больше недостающих полей, тем ниже\n"
             "Если даны замечания проверки — исправь именно их. "
             "Никакого markdown, только валидный JSON.\n"
-            f"Схема ответа: {_schema_text(Card)}"
+            f"Схема ответа: {_schema_text(CardDraft)}"
         ),
         model=_model("RagGenerator"),
         model_settings=_MODEL_SETTINGS,
-        output_type=RawJsonOutput(Card),
+        output_type=RawJsonOutput(CardDraft),
     )
 
 

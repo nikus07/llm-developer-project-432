@@ -3,7 +3,7 @@ import asyncio
 import pytest
 
 from app.rag.context import Context, ContextItem
-from app.schemas import Card, JudgeVerdict, SourceRef
+from app.schemas import CardDraft, JudgeVerdict, SourceRef
 from evals import judge as judge_module
 from evals.judge import judge_prompt
 from evals.metrics import (
@@ -41,8 +41,8 @@ def test_composite_value_is_split_but_decimal_comma_is_not():
     ]
 
 
-def _card(characteristics=None, **kw) -> Card:
-    return Card(title="Т", description="О", characteristics=characteristics or {}, **kw)
+def _card(characteristics=None, **kw) -> CardDraft:
+    return CardDraft(title="Т", description="О", characteristics=characteristics or {}, **kw)
 
 
 def test_characteristic_matches_after_normalization():

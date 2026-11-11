@@ -1,13 +1,13 @@
 """Стадии пайплайна. Один код для FastAPI и Temporal."""
 from app.agents.prompts import critic_agent, extractor_agent, generator_agent
 from app.core.logging import get_logger
-from app.schemas import Card, CritiqueReport, SupplierFacts
+from app.schemas import CardDraft, CritiqueReport, SupplierFacts
 from app.services.structured import call_structured
 
 log = get_logger(__name__)
 
 
-def apply_facts_gaps(card: Card, facts: SupplierFacts) -> Card:
+def apply_facts_gaps(card: CardDraft, facts: SupplierFacts) -> CardDraft:
     """Отказ вместо догадки: недостающее из фактов попадает в карточку кодом, не промптом.
 
     - всё, чего нет в фактах, идёт в missing_fields и убирается из характеристик
@@ -35,16 +35,16 @@ async def extract(supplier_text: str) -> SupplierFacts:
     return await call_structured(extractor_agent(), supplier_text, SupplierFacts)
 
 
-async def generate(facts: SupplierFacts, feedback: list[str] | None = None) -> Card:
+async def generate(facts: SupplierFacts, feedback: list[str] | None = None) -> CardDraft:
     prompt = "Факты о товаре:\n" + facts.model_dump_json(indent=2)
     if feedback:
         prompt += "\n\nЗамечания критика, учти:\n" + "\n".join(f"- {i}" for i in feedback)
     log.info("step_generate_start", feedback=bool(feedback))
-    card = await call_structured(generator_agent(), prompt, Card, field_repair=True)
+    card = await call_structured(generator_agent(), prompt, CardDraft, field_repair=True)
     return apply_facts_gaps(card, facts)
 
 
-async def critique(facts: SupplierFacts, draft: Card) -> CritiqueReport:
+async def critique(facts: SupplierFacts, draft: CardDraft) -> CritiqueReport:
     prompt = (
         "Факты о товаре:\n"
         + facts.model_dump_json(indent=2)

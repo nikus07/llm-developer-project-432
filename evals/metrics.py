@@ -1,7 +1,7 @@
 """Метрики качества генерации: чистые функции, без модели и без базы."""
 import re
 
-from app.schemas import Card, JudgeVerdict
+from app.schemas import CardDraft, JudgeVerdict
 
 _SPACE_CHARS_RE = re.compile("[   ]")
 _DECIMAL_COMMA_RE = re.compile(r"(?<=\d),(?=\d)")
@@ -39,7 +39,7 @@ def _contains(haystack: str, needle: str) -> bool:
     return bool(needle) and needle in haystack
 
 
-def characteristic_matches(key: str, expected: str, card: Card) -> bool:
+def characteristic_matches(key: str, expected: str, card: CardDraft) -> bool:
     """Совпала ли ожидаемая характеристика с карточкой.
 
     Ключ есть в карточке — значения сравниваются после нормализации (равенство или
@@ -59,7 +59,7 @@ def characteristic_matches(key: str, expected: str, card: Card) -> bool:
     )
 
 
-def characteristics_accuracy(expected: dict[str, str], card: Card) -> float | None:
+def characteristics_accuracy(expected: dict[str, str], card: CardDraft) -> float | None:
     """Метрика 1: доля ожидаемых характеристик, совпавших с эталоном."""
     if not expected:
         return None
@@ -67,7 +67,9 @@ def characteristics_accuracy(expected: dict[str, str], card: Card) -> float | No
     return hits / len(expected)
 
 
-def missing_fields_scores(expected: list[str], card: Card) -> tuple[float | None, float | None]:
+def missing_fields_scores(
+    expected: list[str], card: CardDraft
+) -> tuple[float | None, float | None]:
     """(полнота, точность) списка недостающих полей относительно эталона."""
     want = {norm_key(f) for f in expected if f != "*"}
     got = {norm_key(f) for f in card.missing_fields}
@@ -84,7 +86,7 @@ def _value_in_text(value: str, text: str) -> bool:
 
 
 def citation_report(
-    card: Card,
+    card: CardDraft,
     chunk_texts: dict[int, str],
     probes: dict | None = None,
     chunk_pages: dict[int, int] | None = None,
@@ -131,7 +133,7 @@ def citation_report(
     }
 
 
-def judge_score(card: Card, verdict: JudgeVerdict) -> float | None:
+def judge_score(card: CardDraft, verdict: JudgeVerdict) -> float | None:
     """Метрика 3: доля характеристик, которые судья счёл подтверждёнными источниками.
 
     Судья называет неподтверждённые, а считает код: модели не доверяем арифметику.

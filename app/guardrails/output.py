@@ -8,7 +8,7 @@ from dataclasses import dataclass, field
 
 from app.guardrails.injection import scan_rules
 from app.guardrails.pii import PiiMasker, pii_kinds
-from app.schemas import Card
+from app.schemas import CardDraft
 
 _WORDS_RE = re.compile(r"\w+", re.UNICODE)
 _SHINGLE = 4  # столько слов подряд, повторённых из исключённого фрагмента, — след инъекции
@@ -16,7 +16,7 @@ _SHINGLE = 4  # столько слов подряд, повторённых и�
 
 @dataclass
 class OutputCheck:
-    card: Card
+    card: CardDraft
     findings: list[dict] = field(default_factory=list)  # вид и место, без самих значений
 
     @property
@@ -52,7 +52,7 @@ def _shingles(text: str) -> set[tuple[str, ...]]:
     return {tuple(words[i : i + _SHINGLE]) for i in range(len(words) - _SHINGLE + 1)}
 
 
-def check_output(card: Card, excluded_texts: list[str] | None = None) -> OutputCheck:
+def check_output(card: CardDraft, excluded_texts: list[str] | None = None) -> OutputCheck:
     """Контакты, следы служебных инструкций и повторы исключённых фрагментов.
 
     Контакты в карточке заменяются метками, остальное только отмечается: решает человек.
@@ -73,5 +73,5 @@ def check_output(card: Card, excluded_texts: list[str] | None = None) -> OutputC
             findings.append({"kind": "повтор исключённого фрагмента", "field": field_name})
 
     masker = PiiMasker()
-    cleaned = Card.model_validate(_walk(data, masker.mask))
+    cleaned = CardDraft.model_validate(_walk(data, masker.mask))
     return OutputCheck(card=cleaned, findings=findings)

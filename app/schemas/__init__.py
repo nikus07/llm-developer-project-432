@@ -1,5 +1,5 @@
 from app.schemas.cards import (
-    Card,
+    CardDraft,
     CritiqueReport,
     JudgeVerdict,
     Seo,
@@ -9,7 +9,7 @@ from app.schemas.cards import (
 from app.schemas.jobs import GenerateIn, JobCost, JobIn, JobOut
 
 __all__ = [
-    "Card",
+    "CardDraft",
     "GenerateIn",
     "CritiqueReport",
     "JobCost",

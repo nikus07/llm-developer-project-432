@@ -9,14 +9,14 @@ from pathlib import PurePath
 from app.agents.prompts import rag_critic_agent, rag_generator_agent
 from app.core.config import settings
 from app.core.logging import get_logger
-from app.guardrails.injection import classify
+from app.guardrails import guard_context
 from app.guardrails.output import check_output
 from app.guardrails.pii import PiiMasker
 from app.rag.context import Context, build_context
 from app.rag.retrieval import search
 from app.repositories import chunks as chunks_repo
 from app.repositories import documents as documents_repo
-from app.schemas import Card, CritiqueReport, SupplierFacts
+from app.schemas import CardDraft, CritiqueReport, SupplierFacts
 from app.services import pipeline
 from app.services.structured import call_structured
 
@@ -116,15 +116,15 @@ async def generate_card(
     context: Context,
     hint: str | None = None,
     feedback: list[str] | None = None,
-) -> Card:
+) -> CardDraft:
     log.info("rag_generate_start", fragments=len(context.items), feedback=bool(feedback))
     prompt = _generation_prompt(facts, context, hint, feedback)
-    card = await call_structured(rag_generator_agent(), prompt, Card, field_repair=True)
+    card = await call_structured(rag_generator_agent(), prompt, CardDraft, field_repair=True)
     return pipeline.apply_facts_gaps(card, facts)
 
 
 def find_reference_issues(
-    card: Card, context_ids: set[int], existing_ids: set[int]
+    card: CardDraft, context_ids: set[int], existing_ids: set[int]
 ) -> list[str]:
     """Проверка ссылок. Каждая должна пройти два условия:
 
@@ -155,7 +155,7 @@ def find_reference_issues(
     return issues
 
 
-def verify_references(card: Card, context: Context) -> tuple[Card, list[str]]:
+def verify_references(card: CardDraft, context: Context) -> tuple[CardDraft, list[str]]:
     """Проверяет ссылки и оставляет в карточке только верные, дополнив их метаданными.
 
     Возвращает (карточка, нарушения). Документ, страница и секция берутся из базы,
@@ -178,7 +178,7 @@ def verify_references(card: Card, context: Context) -> tuple[Card, list[str]]:
     return card.model_copy(update={"sources": valid}), issues
 
 
-async def critique_card(facts: SupplierFacts, context: Context, card: Card) -> CritiqueReport:
+async def critique_card(facts: SupplierFacts, context: Context, card: CardDraft) -> CritiqueReport:
     """Проверяющая роль: каждое утверждение карточки сверяется с заявленным источником."""
     prompt = (
         "Источники:\n"
@@ -193,64 +193,21 @@ async def critique_card(facts: SupplierFacts, context: Context, card: Card) -> C
 
 
 async def screen_context(context: Context) -> tuple[Context, dict, list[str]]:
-    """Второй рубеж: детектор инъекций. Подозрительные фрагменты — вон из контекста.
+    """Рубежи 1 и 2: маскирование и детектор инъекций (см. guardrails.guard_context).
 
-    Возвращает (очищенный контекст, отчёт, тексты исключённых для фильтра выхода). Если
-    подозрительных не меньше порога из настроек или не осталось ни одного фрагмента —
-    документ целиком уходит к человеку с причиной. В отчёте нет исходных значений.
+    Возвращает (очищенный контекст, отчёт, тексты исключённых для фильтра выхода).
     """
-    kept = []
-    excluded: list[dict] = []
-    excluded_texts: list[str] = []
-    model_checks = 0
-    for item in context.items:
-        result = await classify(item.text)
-        model_checks += result.model_called
-        if not result.suspicious:
-            kept.append(item)
-            continue
-        excluded_texts.append(item.text)
-        excluded.append(
-            {
-                "chunk_id": item.chunk_id,
-                "document": item.document,
-                "page": item.page,
-                "section": item.section,
-                "level": result.level,
-                "rules": result.rules,
-                "reason": result.reason,
-            }
-        )
-        log.warning("fragment_excluded", chunk_id=item.chunk_id, level=result.level,
-                    rules=result.rules)
-
-    escalation = None
-    if len(excluded) >= settings.injection_max_suspicious:
-        escalation = (
-            f"подозрительных фрагментов {len(excluded)} "
-            f"(порог {settings.injection_max_suspicious}): документ отправлен человеку"
-        )
-    elif not kept:
-        escalation = "все найденные фрагменты исключены как подозрительные"
-
-    report = {
-        "masked": context.pii_masked,
-        "checked_fragments": len(context.items),
-        "model_checks": model_checks,
-        "excluded": excluded,
-        "escalated": escalation is not None,
-        "escalation_reason": escalation,
-    }
-    screened = Context(
-        items=kept,
-        duplicates_removed=context.duplicates_removed,
-        omitted=context.omitted,
-        pii_masked=context.pii_masked,
-    )
-    return screened, report, excluded_texts
+    guarded, report = await guard_context(context)
+    kept = guarded.chunk_ids
+    # исключённые тексты уходят дальше (в фильтр выхода) только замаскированными
+    masker = PiiMasker()
+    excluded_texts = [
+        masker.mask(item.text) for item in context.items if item.chunk_id not in kept
+    ]
+    return guarded, report.model_dump(), excluded_texts
 
 
-def filter_output(card: Card, excluded_texts: list[str]) -> tuple[Card, list[dict]]:
+def filter_output(card: CardDraft, excluded_texts: list[str]) -> tuple[CardDraft, list[dict]]:
     """Третий рубеж: контакты и следы инструкций в сгенерированной карточке."""
     checked = check_output(card, excluded_texts)
     return checked.card, checked.findings
