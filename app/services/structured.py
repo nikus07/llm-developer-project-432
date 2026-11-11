@@ -8,7 +8,7 @@ from app.agents.prompts import field_fixer_agent
 from app.core.config import settings
 from app.core.logging import get_logger
 from app.llm.client import run_agent
-from app.services.json_utils import JsonParseError, extract_json
+from app.services.json_utils import LLMJsonError, parse_llm_json
 
 log = get_logger(__name__)
 
@@ -61,9 +61,9 @@ async def fix_field(data: dict, field: str, problem: str) -> object:
     )
     log.info("field_repair", field=field, problem=problem)
     out = await run_agent(field_fixer_agent(), prompt)
-    fixed = extract_json(_as_text(out))
+    fixed = parse_llm_json(_as_text(out))
     if field not in fixed:
-        raise JsonParseError(f"в ответе нет поля {field!r}")
+        raise LLMJsonError(f"в ответе нет поля {field!r}")
     return fixed[field]
 
 
@@ -92,9 +92,9 @@ async def call_structured(
         data: dict | None = None
         fields: list[str] | None = None
         try:
-            data = extract_json(raw)
+            data = parse_llm_json(raw)
             return model_cls.model_validate(data)
-        except JsonParseError as exc:
+        except LLMJsonError as exc:
             problem = str(exc)
         except ValidationError as exc:
             problem = _describe(exc)
@@ -114,7 +114,7 @@ async def call_structured(
                     if fixed == data.get(name):
                         unchanged.add(name)
                     data[name] = fixed
-            except JsonParseError as exc:
+            except LLMJsonError as exc:
                 raise StructuredOutputError(f"{model_cls.__name__}: {exc}") from exc
             out = json.dumps(data, ensure_ascii=False)
             continue

@@ -6,7 +6,7 @@ from docx.table import Table
 from docx.text.paragraph import Paragraph
 
 from app.parsers.models import Block, DocumentRejected
-from app.parsers.normalizer import normalize_text
+from app.parsers.normalizer import clean_text
 from app.parsers.table import cell_text, row_to_block
 
 _DEFAULT_SECTION = "Документ"
@@ -41,7 +41,7 @@ def parse_docx(path: Path) -> list[Block]:
 
     def flush() -> None:
         nonlocal buffer
-        text = normalize_text("\n".join(buffer))
+        text = clean_text("\n".join(buffer))
         if text:
             blocks.append(Block(kind="text", text=text, page=buffer_page, section=section))
         buffer = []

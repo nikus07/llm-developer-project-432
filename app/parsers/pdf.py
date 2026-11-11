@@ -6,10 +6,10 @@ from pypdf import PdfReader
 
 from app.parsers.models import Block, DocumentRejected
 from app.parsers.normalizer import (
+    clean_text,
     edge_lines,
     is_page_marker,
     line_key,
-    normalize_text,
     repeated_line_keys,
 )
 
@@ -70,7 +70,7 @@ def parse_pdf(path: Path) -> list[Block]:
         buffer: list[str] = []
 
         def flush(page_number: int, buf: list[str], title: str) -> None:
-            text = normalize_text("\n".join(buf))
+            text = clean_text("\n".join(buf))
             if text:
                 blocks.append(Block(kind="text", text=text, page=page_number, section=title))
 

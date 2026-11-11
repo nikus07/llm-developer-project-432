@@ -6,7 +6,7 @@ _THINK_RE = re.compile(r"<think>.*?</think>", re.DOTALL)
 _FENCE_RE = re.compile(r"```(?:json)?\s*(.*?)\s*```", re.DOTALL | re.IGNORECASE)
 
 
-class JsonParseError(ValueError):
+class LLMJsonError(ValueError):
     """Из ответа нельзя достать JSON-объект."""
 
 
@@ -18,15 +18,15 @@ def _loads_object(text: str) -> dict | None:
     return value if isinstance(value, dict) else None
 
 
-def extract_json(text: str) -> dict:
+def parse_llm_json(text: str) -> dict:
     """Достаёт JSON-объект из ответа модели.
 
     Переживает: чистый JSON, обёртку из markdown-заборов, текст до и после JSON,
-    блок рассуждений <think>. Иначе — JsonParseError с понятным текстом.
+    блок рассуждений <think>. Иначе — LLMJsonError с понятным текстом.
     """
     text = _THINK_RE.sub("", text or "").strip()
     if not text:
-        raise JsonParseError("пустой ответ модели")
+        raise LLMJsonError("пустой ответ модели")
 
     if (data := _loads_object(text)) is not None:
         return data
@@ -46,4 +46,4 @@ def extract_json(text: str) -> dict:
         if isinstance(value, dict):
             return value
 
-    raise JsonParseError(f"в ответе нет JSON-объекта: {text[:80]!r}")
+    raise LLMJsonError(f"в ответе нет JSON-объекта: {text[:80]!r}")

@@ -26,7 +26,7 @@ _EDGE_LINES = 2
 _MIN_HEADER_LEN = 4
 
 
-def normalize_text(text: str) -> str:
+def clean_text(text: str) -> str:
     """Лигатуры, переносы через дефис, лишние пробелы и пустые строки."""
     text = _LIGATURE_RE.sub(lambda m: _LIGATURES[m.group()], text)
     text = text.replace("\r\n", "\n").replace("\r", "\n")
@@ -80,3 +80,21 @@ def repeated_line_keys(pages: list[list[str]]) -> set[str]:
             if len(key) >= _MIN_HEADER_LEN:
                 seen[key] = seen.get(key, 0) + 1
     return {key for key, count in seen.items() if count >= threshold}
+
+
+def normalize(pages: list[str] | str) -> list[str] | str:
+    """Нормализация документа по страницам: колонтитулы, переносы, лигатуры, пробелы.
+
+    Список страниц — на выходе список очищенных страниц без колонтитулов (строки у края,
+    повторяющиеся на страницах, и строки с номером страницы). Одна строка — просто clean_text.
+    """
+    if isinstance(pages, str):
+        return clean_text(pages)
+    lines_by_page = [page.split("\n") for page in pages]
+    repeated = repeated_line_keys(lines_by_page)
+    for lines in lines_by_page:
+        repeated |= {line_key(ln) for ln in edge_lines(lines) if is_page_marker(ln)}
+    return [
+        clean_text("\n".join(ln for ln in lines if line_key(ln) not in repeated))
+        for lines in lines_by_page
+    ]

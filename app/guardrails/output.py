@@ -6,7 +6,7 @@
 import re
 from dataclasses import dataclass, field
 
-from app.guardrails.injection import scan_rules
+from app.guardrails.injection import detect_injection_regex
 from app.guardrails.pii import PiiMasker, pii_kinds
 from app.schemas import CardDraft
 
@@ -67,7 +67,7 @@ def check_output(card: CardDraft, excluded_texts: list[str] | None = None) -> Ou
         field_name = path.split(".")[0] or "card"
         for kind in pii_kinds(text):
             findings.append({"kind": f"персональные данные: {kind}", "field": field_name})
-        for rule in scan_rules(text):
+        for rule in detect_injection_regex(text):
             findings.append({"kind": f"след инструкции: {rule}", "field": field_name})
         if excluded and _shingles(text) & excluded:
             findings.append({"kind": "повтор исключённого фрагмента", "field": field_name})

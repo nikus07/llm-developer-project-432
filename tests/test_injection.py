@@ -6,7 +6,7 @@ import pytest
 
 from app.core.config import settings
 from app.guardrails import injection
-from app.guardrails.injection import classify, scan_rules
+from app.guardrails.injection import classify, detect_injection_regex
 from app.parsers import docx, pdf, xlsx
 from app.parsers.chunker import chunk_blocks
 from app.rag.context import Context, ContextItem
@@ -28,21 +28,21 @@ def _fragments(name: str) -> list[str]:
 
 
 def test_injection_from_supplied_document_is_caught_by_rules():
-    hits = [text for text in _fragments("kettle_manual.pdf") if scan_rules(text)]
+    hits = [text for text in _fragments("kettle_manual.pdf") if detect_injection_regex(text)]
     assert len(hits) == 1 and "игнорируй все предыдущие инструкции" in hits[0]
-    assert {"приказ_игнорировать", "маркер_роли"} <= set(scan_rules(hits[0]))
+    assert {"приказ_игнорировать", "маркер_роли"} <= set(detect_injection_regex(hits[0]))
 
 
 @pytest.mark.parametrize(
     "name", ["blender_passport.pdf", "blender_kp.docx", "kettle_spec.xlsx"]
 )
 def test_clean_supplied_documents_are_not_flagged(name):
-    assert [t for t in _fragments(name) if scan_rules(t)] == []
+    assert [t for t in _fragments(name) if detect_injection_regex(t)] == []
 
 
 def test_clean_part_of_document_with_injection_is_not_flagged():
     clean = [t for t in _fragments("kettle_manual.pdf") if "игнорируй" not in t]
-    assert clean and all(not scan_rules(t) for t in clean)
+    assert clean and all(not detect_injection_regex(t) for t in clean)
 
 
 @pytest.mark.parametrize(
@@ -61,7 +61,7 @@ def test_clean_part_of_document_with_injection_is_not_flagged():
     ],
 )
 def test_rules_flag_typical_attacks(text):
-    assert scan_rules(text)
+    assert detect_injection_regex(text)
 
 
 @pytest.mark.parametrize(
@@ -74,7 +74,7 @@ def test_rules_flag_typical_attacks(text):
     ],
 )
 def test_rules_do_not_flag_normal_text(text):
-    assert scan_rules(text) == []
+    assert detect_injection_regex(text) == []
 
 
 # --- модель по помеченным; отказ модели не открывает дверь ---

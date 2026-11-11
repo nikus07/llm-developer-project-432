@@ -50,7 +50,7 @@ _RULES: list[tuple[str, re.Pattern]] = [
 _MAX_FRAGMENT_CHARS = 2500
 
 
-def scan_rules(text: str) -> list[str]:
+def detect_injection_regex(text: str) -> list[str]:
     """Имена сработавших правил: быстрый уровень, без обращения к модели."""
     return [name for name, pattern in _RULES if pattern.search(text)]
 
@@ -70,7 +70,7 @@ def _prompt(text: str) -> str:
 
 async def classify(text: str) -> InjectionResult:
     """Подозрителен ли фрагмент. Модель спрашиваем только если правила что-то пометили."""
-    rules = scan_rules(text)
+    rules = detect_injection_regex(text)
     if not rules:
         return InjectionResult(False, "clean")
 
