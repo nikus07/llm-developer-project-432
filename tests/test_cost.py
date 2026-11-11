@@ -69,7 +69,7 @@ class _Usage:
 class _Result:
     final_output = "ok"
 
-    class context_wrapper:  # noqa: N801 — имитация RunResult SDK
+    class context_wrapper:  # имитация RunResult SDK
         usage = _Usage()
 
 

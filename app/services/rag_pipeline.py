@@ -8,7 +8,6 @@ from pathlib import PurePath
 
 from app.agents.prompts import rag_critic_agent, rag_generator_agent
 from app.core.config import settings
-from app.core.config import settings as _settings  # noqa: F401
 from app.core.logging import get_logger
 from app.guardrails.injection import classify
 from app.guardrails.output import check_output
@@ -226,10 +225,10 @@ async def screen_context(context: Context) -> tuple[Context, dict, list[str]]:
                     rules=result.rules)
 
     escalation = None
-    if len(excluded) >= _settings.injection_max_suspicious:
+    if len(excluded) >= settings.injection_max_suspicious:
         escalation = (
             f"подозрительных фрагментов {len(excluded)} "
-            f"(порог {_settings.injection_max_suspicious}): документ отправлен человеку"
+            f"(порог {settings.injection_max_suspicious}): документ отправлен человеку"
         )
     elif not kept:
         escalation = "все найденные фрагменты исключены как подозрительные"
