@@ -5,7 +5,7 @@ from app.core.config import settings
 from app.core.logging import get_logger
 from app.parsers import docx, pdf, xlsx
 from app.parsers.chunker import chunk_blocks
-from app.parsers.models import DocumentRejected
+from app.parsers.models import Chunk, DocumentRejected
 from app.rag.reindex import index_chunks
 from app.repositories import chunks as chunks_repo
 from app.repositories import documents as documents_repo
@@ -27,6 +27,22 @@ def save_upload(document_id: str, filename: str, content: bytes) -> Path:
     return path
 
 
+def parse_to_chunks(path: Path | str) -> list[Chunk]:
+    """Файл → разбор → нормализация → резка: фрагменты с метаданными, без базы.
+
+    Расширение выбирает разборщик. Документ, который разобрать нельзя (скан без текстового
+    слоя, битый файл, пустой результат), даёт DocumentRejected с причиной, а не пустой список.
+    """
+    path = Path(path)
+    parser = PARSERS.get(path.suffix.lower())
+    if parser is None:
+        raise DocumentRejected(f"формат {path.suffix or 'без расширения'} не поддерживается")
+    chunks = chunk_blocks(parser(path))
+    if not chunks:
+        raise DocumentRejected("из документа не удалось извлечь ни одного фрагмента")
+    return chunks
+
+
 def process_document(document_id: str) -> dict:
     """Блокирующий шаг: диск, разбор файла, база. Исполняется в потоке воркера.
 
@@ -39,12 +55,8 @@ def process_document(document_id: str) -> dict:
         raise LookupError(f"документ {document_id} не найден")
 
     documents_repo.set_status(document_id, "parsing")
-    suffix = Path(document["filename"]).suffix.lower()
     try:
-        blocks = PARSERS[suffix](stored_path(document_id, document["filename"]))
-        chunks = chunk_blocks(blocks)
-        if not chunks:
-            raise DocumentRejected("из документа не удалось извлечь ни одного фрагмента")
+        chunks = parse_to_chunks(stored_path(document_id, document["filename"]))
     except DocumentRejected as exc:
         log.warning("document_rejected", document_id=document_id, reason=str(exc))
         documents_repo.set_status(document_id, "failed", reason=str(exc))

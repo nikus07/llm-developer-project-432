@@ -100,3 +100,21 @@ def test_scanned_pdf_raises_dedicated_no_text_layer_error():
     with pytest.raises(PdfNoTextLayer, match="нет текстового слоя"):
         pdf.parse_pdf(DATA / "boiler_scan.pdf")
     assert issubclass(PdfNoTextLayer, DocumentRejected)  # сервис ловит его как отказ документа
+
+
+def test_parse_to_chunks_returns_chunks_with_metadata_for_every_format():
+    from app.services.documents import parse_to_chunks
+
+    for name in ("blender_passport.pdf", "blender_kp.docx", "kettle_spec.xlsx"):
+        chunks = parse_to_chunks(DATA / name)
+        assert chunks and all(c.page >= 1 and c.section for c in chunks)
+        assert [c.idx for c in chunks] == list(range(len(chunks)))  # нумерация подряд
+
+
+def test_parse_to_chunks_rejects_scan_and_unknown_format(tmp_path):
+    from app.services.documents import parse_to_chunks
+
+    with pytest.raises(DocumentRejected, match="нет текстового слоя"):
+        parse_to_chunks(str(DATA / "boiler_scan.pdf"))  # путь строкой тоже подходит
+    with pytest.raises(DocumentRejected, match="не поддерживается"):
+        parse_to_chunks(tmp_path / "notes.txt")
