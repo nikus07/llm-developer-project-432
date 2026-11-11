@@ -92,3 +92,11 @@ def test_long_line_is_split_by_words():
     pieces = split_text("слово " * 100, size=100, overlap=0)
     assert all(len(p) <= 100 for p in pieces)
     assert " ".join(pieces).split() == ["слово"] * 100
+
+
+def test_scanned_pdf_raises_dedicated_no_text_layer_error():
+    from app.parsers.pdf import PdfNoTextLayer
+
+    with pytest.raises(PdfNoTextLayer, match="нет текстового слоя"):
+        pdf.parse_pdf(DATA / "boiler_scan.pdf")
+    assert issubclass(PdfNoTextLayer, DocumentRejected)  # сервис ловит его как отказ документа

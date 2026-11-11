@@ -27,7 +27,7 @@ def _checksum(digits: list[int], coefficients: tuple[int, ...]) -> int:
     return sum(d * c for d, c in zip(digits, coefficients, strict=False)) % 11 % 10
 
 
-def inn_valid(value: str) -> bool:
+def _inn_checksum(value: str) -> bool:
     """ИНН с проверкой контрольной суммы.
 
     Одной длины мало: детектор «10 или 12 цифр» маскировал бы артикулы, суммы и даты
@@ -44,6 +44,9 @@ def inn_valid(value: str) -> bool:
             and _checksum(digits, _INN12_N12) == digits[11]
         )
     return False
+
+
+inn_valid = _inn_checksum
 
 
 def luhn_valid(value: str) -> bool:
@@ -86,7 +89,7 @@ def find_pii(text: str) -> list[PiiFinding]:
     for match in _PHONE_RE.finditer(text):
         add("phone", match)
     for match in _INN_RE.finditer(text):
-        if inn_valid(match.group()):
+        if _inn_checksum(match.group()):
             add("inn", match)
     return sorted(found, key=lambda f: f.start)
 
@@ -131,3 +134,20 @@ def mask_text(text: str) -> tuple[str, dict[str, int]]:
     masker = PiiMasker()
     masked = masker.mask(text)
     return masked, dict(masker.counts)
+
+
+def contains_pii(text: str) -> bool:
+    """Есть ли в тексте персональные данные (телефон, email, ИНН с верной суммой, карта)."""
+    return bool(find_pii(text))
+
+
+def mask_pii(text: str) -> tuple[str, list[dict]]:
+    """Замаскированный текст и список найденного: вид и метка, без исходных значений."""
+    masker = PiiMasker()
+    findings = find_pii(text)
+    masked = masker.mask(text)
+    labels = re.findall(r"\[[A-ZА-ЯЁ]+_\d+\]", masked)
+    result = []
+    for finding, label in zip(findings, labels, strict=False):
+        result.append({"kind": finding.kind, "label": label})
+    return masked, result

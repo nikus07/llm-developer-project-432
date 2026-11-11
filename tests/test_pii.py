@@ -1,6 +1,15 @@
 import pytest
 
-from app.guardrails.pii import PiiMasker, find_pii, inn_valid, luhn_valid, mask_text, pii_kinds
+from app.guardrails.pii import (
+    PiiMasker,
+    _inn_checksum,
+    contains_pii,
+    find_pii,
+    luhn_valid,
+    mask_pii,
+    mask_text,
+    pii_kinds,
+)
 
 
 @pytest.mark.parametrize(
@@ -29,20 +38,20 @@ def test_email_is_masked():
 
 def test_inn_with_valid_checksum_is_masked():
     # 7712345671 — ИНН организации с верной контрольной цифрой
-    assert inn_valid("7712345671")
+    assert _inn_checksum("7712345671")
     masked, counts = mask_text("ИНН компании: 7712345671")
     assert masked == "ИНН компании: [ИНН_1]" and counts == {"инн": 1}
 
 
 def test_inn_of_individual_with_two_check_digits():
-    assert inn_valid("500100732259")  # 12 цифр: проверяются обе контрольные
-    assert not inn_valid("500100732258")
+    assert _inn_checksum("500100732259")  # 12 цифр: проверяются обе контрольные
+    assert not _inn_checksum("500100732258")
 
 
 def test_number_with_wrong_checksum_is_left_alone():
     """Одна длина — не признак ИНН: артикулы, суммы и даты маскировать нельзя."""
     for number in ("1234567890", "7712345670", "123456789012"):
-        assert not inn_valid(number)
+        assert not _inn_checksum(number)
         text = f"Партия {number} шт."
         assert mask_text(text) == (text, {})
 
@@ -95,3 +104,19 @@ def test_manager_block_from_commercial_offer():
         assert raw not in masked
     assert "1157746123450" in masked  # ОГРН остаётся
     assert counts == {"телефон": 1, "email": 1, "инн": 1}
+
+
+def test_mask_pii_returns_masked_text_and_findings_without_values():
+    masked, found = mask_pii("Звоните +7 926 555-14-08, почта a@b.example")
+    assert "926" not in masked and "a@b.example" not in masked
+    assert found == [
+        {"kind": "phone", "label": "[ТЕЛЕФОН_1]"},
+        {"kind": "email", "label": "[EMAIL_1]"},
+    ]
+    assert mask_pii("ничего личного") == ("ничего личного", [])
+
+
+def test_contains_pii():
+    assert contains_pii("пишите a@b.example")
+    assert contains_pii("ИНН 7712345671")
+    assert not contains_pii("Артикул BLD-1200, партия 1234567890 шт.")

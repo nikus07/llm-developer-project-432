@@ -13,6 +13,11 @@ from app.parsers.normalizer import (
     repeated_line_keys,
 )
 
+
+class PdfNoTextLayer(DocumentRejected):
+    """В pdf нет текстового слоя: скан. Распознавание текста не подключено."""
+
+
 _DEFAULT_SECTION = "Документ"
 _HEADING_MIN_SIZE = 11.0
 # в режиме layout колонки таблицы разделены широким просветом
@@ -57,7 +62,7 @@ def parse_pdf(path: Path) -> list[Block]:
         raise DocumentRejected(f"не удалось открыть pdf: {exc}") from exc
 
     if not any(lines for lines, _ in pages):
-        raise DocumentRejected(
+        raise PdfNoTextLayer(
             "в pdf нет текстового слоя (похоже на скан): распознавание текста не подключено"
         )
 
