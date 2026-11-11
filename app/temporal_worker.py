@@ -23,6 +23,7 @@ from app.temporal.activities import (
     set_status_activity,
     verify_references_activity,
 )
+from app.temporal.tracing import TraceInterceptor
 from app.temporal.workflows import CardWorkflow, DocumentWorkflow, GenerateWorkflow
 
 log = get_logger(__name__)
@@ -54,6 +55,7 @@ async def main():
                 verify_references_activity,
             ],
             activity_executor=executor,
+            interceptors=[TraceInterceptor()],
         )
         log.info("temporal_worker_started", task_queue=settings.temporal_task_queue)
         try:

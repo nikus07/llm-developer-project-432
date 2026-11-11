@@ -1,3 +1,4 @@
+from decimal import Decimal
 from pathlib import Path
 
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -9,6 +10,14 @@ class Settings(BaseSettings):
     llm_base_url: str = "http://localhost:1234/v1"
     llm_api_key: str = "lm-studio"
     llm_model: str = "gemma-4-e4b-it"
+    # служебная (дешёвая) модель: проверка черновика, правка поля, судья; пусто — как основная
+    llm_model_light: str | None = None
+    # цены, ₽ за миллион токенов. Локальная модель бесплатна, поэтому цены условные:
+    # они нужны, чтобы таблица вызовов и разбивка по моделям показывали разницу тарифов
+    llm_price_main_input: Decimal = Decimal("15")
+    llm_price_main_output: Decimal = Decimal("60")
+    llm_price_light_input: Decimal = Decimal("3")
+    llm_price_light_output: Decimal = Decimal("12")
 
     database_url: str = "postgresql://card:card@localhost:5432/card"
     rabbitmq_url: str = "amqp://card:card@localhost:5672//"

@@ -1,4 +1,4 @@
-.PHONY: help infra migrate reindex search lint test api temporal-worker
+.PHONY: help infra migrate reindex search costs eval lint test api temporal-worker
 
 help:
 	@echo "make infra           - поднять postgres + temporal + rabbitmq (docker compose)"
@@ -12,6 +12,12 @@ infra:
 
 migrate:
 	python -m app.core.migrate
+
+costs:
+	python -m app.llm.report $(if $(JOB),--job $(JOB),)
+
+eval:
+	python -m evals.run_metrics $(if $(ALL),--all,)
 
 reindex:
 	python -m app.rag.reindex

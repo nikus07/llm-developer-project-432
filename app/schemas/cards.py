@@ -93,3 +93,17 @@ class CritiqueReport(BaseModel):
         description="Список проблем: заголовок длиннее допустимого, "
         "выдуманные характеристики, пустые поля и т.п.",
     )
+
+
+class JudgeVerdict(BaseModel):
+    """Вердикт модели-судьи: подтверждает ли набор источников утверждения карточки."""
+
+    unsupported_characteristics: list[str] = Field(
+        default_factory=list,
+        description="Ключи характеристик, значения которых источники не подтверждают",
+    )
+    unsupported_claims: list[str] = Field(
+        default_factory=list,
+        description="Утверждения из описания и преимуществ без опоры на источники",
+    )
+    comment: str = ""

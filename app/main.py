@@ -4,6 +4,7 @@ from fastapi import FastAPI
 
 from app.core.db import close_pool, init_pool
 from app.core.logging import setup_logging
+from app.core.tracing import RequestContextMiddleware
 from app.routers import cards, documents, generate, health, jobs, search, workflows
 
 
@@ -16,6 +17,7 @@ async def lifespan(app: FastAPI):
 
 
 app = FastAPI(title="card-pipeline", lifespan=lifespan)
+app.add_middleware(RequestContextMiddleware)
 app.include_router(health.router)
 app.include_router(cards.router)
 app.include_router(documents.router)

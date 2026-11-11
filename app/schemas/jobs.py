@@ -1,3 +1,5 @@
+from decimal import Decimal
+
 from pydantic import BaseModel, Field
 
 from app.schemas.cards import Card
@@ -18,3 +20,12 @@ class JobOut(BaseModel):
     attempts: int
     result: Card | None = None
     error: str | None = None
+
+
+class JobCost(BaseModel):
+    job_id: str
+    calls: int
+    input_tokens: int
+    output_tokens: int
+    cost: Decimal  # ₽, условные цены из настроек; строкой, не float
+    duration_ms: int

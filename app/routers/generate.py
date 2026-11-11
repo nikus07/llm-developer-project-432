@@ -2,6 +2,7 @@ from fastapi import APIRouter, Header, HTTPException
 from starlette.concurrency import run_in_threadpool
 
 from app.core.logging import get_logger
+from app.core.tracing import bind_job, current_request_id
 from app.repositories import documents as documents_repo
 from app.repositories import jobs as jobs_repo
 from app.schemas import GenerateIn, JobOut
@@ -33,8 +34,14 @@ async def generate(
     document_ids = list(dict.fromkeys(body.document_ids))
     await run_in_threadpool(_check_documents, document_ids)
 
-    payload = {"document_ids": document_ids, "hint": body.hint}
+    payload = {
+        "document_ids": document_ids,
+        "hint": body.hint,
+        "request_id": current_request_id(),
+    }
     job, created = await run_in_threadpool(jobs_repo.create, payload, idempotency_key)
+    bind_job(job["id"])
+    log.info("job_created", created=created, kind="generate", documents=len(document_ids))
     if created:
         try:
             await start_generate_workflow(job["id"], document_ids, body.hint)

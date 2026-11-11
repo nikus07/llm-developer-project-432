@@ -6,10 +6,16 @@ from pydantic import BaseModel
 
 from app.core.config import settings
 from app.llm.output import RawJsonOutput
-from app.schemas import Card, CritiqueReport, SupplierFacts
+from app.llm.policy import model_for, tier_for
+from app.schemas import Card, CritiqueReport, JudgeVerdict, SupplierFacts
 
 # Запас токенов под рассуждения: reasoning-модель тратит часть бюджета до ответа.
 _MODEL_SETTINGS = ModelSettings(max_tokens=4096, temperature=0.4)
+
+
+def _model(agent_name: str) -> str:
+    """Модель по политике: служебные роли — дешёвая, генерация — основная."""
+    return model_for(tier_for(agent_name))
 
 
 def _schema_text(model: type[BaseModel]) -> str:
@@ -30,7 +36,7 @@ def extractor_agent() -> Agent:
             "Не выдумывай. Нет данных — поле в missing_fields. "
             "Никакого markdown, только валидный JSON."
         ),
-        model=settings.llm_model,
+        model=_model("Extractor"),
         model_settings=_MODEL_SETTINGS,
         output_type=RawJsonOutput(SupplierFacts),
     )
@@ -59,7 +65,7 @@ def generator_agent() -> Agent:
             "Никакого markdown, только валидный JSON.\n"
             f"Схема ответа: {_schema_text(Card)}"
         ),
-        model=settings.llm_model,
+        model=_model("Generator"),
         model_settings=_MODEL_SETTINGS,
         output_type=RawJsonOutput(Card),
     )
@@ -80,7 +86,7 @@ def critic_agent() -> Agent:
             "(укажи номер правила); пустой список при approve\n"
             "Никакого markdown, только валидный JSON."
         ),
-        model=settings.llm_model,
+        model=_model("Critic"),
         model_settings=_MODEL_SETTINGS,
         output_type=RawJsonOutput(CritiqueReport),
     )
@@ -95,7 +101,7 @@ def field_fixer_agent() -> Agent:
             "Верни только JSON-объект с этим полем и его новым значением. "
             "Никакого markdown и пояснений."
         ),
-        model=settings.llm_model,
+        model=_model("FieldFixer"),
         model_settings=_MODEL_SETTINGS,
     )
 
@@ -131,7 +137,7 @@ def rag_generator_agent() -> Agent:
             "Никакого markdown, только валидный JSON.\n"
             f"Схема ответа: {_schema_text(Card)}"
         ),
-        model=settings.llm_model,
+        model=_model("RagGenerator"),
         model_settings=_MODEL_SETTINGS,
         output_type=RawJsonOutput(Card),
     )
@@ -158,7 +164,31 @@ def rag_critic_agent() -> Agent:
             "и названием характеристики; пустой список при approve\n"
             "Никакого markdown, только валидный JSON."
         ),
-        model=settings.llm_model,
+        model=_model("RagCritic"),
         model_settings=_MODEL_SETTINGS,
         output_type=RawJsonOutput(CritiqueReport),
+    )
+
+
+def judge_agent() -> Agent:
+    """Судья для метрики качества: подтверждаются ли утверждения карточки источниками."""
+    return Agent(
+        name="Judge",
+        instructions=(
+            "Ты — независимый судья. Тебе даны источники (теги <source>) и карточка товара. "
+            "Для каждой характеристики карточки определи, подтверждает ли её значение текст "
+            "источников. Затем проверь утверждения в описании и преимуществах.\n"
+            f"{_UNTRUSTED}\n"
+            "Верни СТРОГО JSON:\n"
+            "- unsupported_characteristics (array of string): ключи характеристик, значения "
+            "которых источники НЕ подтверждают; пустой список, если все подтверждены\n"
+            "- unsupported_claims (array of string): утверждения из описания и преимуществ без "
+            "опоры на источники\n"
+            "- comment (string): одно предложение\n"
+            "Формулировка может отличаться, но смысл и число должны совпадать. "
+            "Никакого markdown, только валидный JSON."
+        ),
+        model=_model("Judge"),
+        model_settings=_MODEL_SETTINGS,
+        output_type=RawJsonOutput(JudgeVerdict),
     )

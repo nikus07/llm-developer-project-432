@@ -1,0 +1,117 @@
+{
+  "run_id": "0713c74d",
+  "started_at": "2026-11-11T08:44:52",
+  "settings": {
+    "llm_model": "qwen3-14b",
+    "llm_model_light": "qwen3-14b",
+    "confidence_threshold": 0.6,
+    "context_max_chars": 6000,
+    "prompts": "ea835a6d54"
+  },
+  "documents": [
+    {
+      "document": "blender_passport.pdf",
+      "status": "indexed",
+      "accuracy": 1.0,
+      "citation": 1.0,
+      "citation_detail": {
+        "card_ok": true,
+        "sources_valid": 12,
+        "sources_total": 12,
+        "uncited": [],
+        "probes": "2/2"
+      },
+      "judge": 1.0,
+      "judge_verdict": {
+        "unsupported_characteristics": [],
+        "unsupported_claims": [
+          "Турбо-режим для быстрого приготовления"
+        ],
+        "comment": "Утверждение о турбо-режиме для быстрого приготовления не подтверждается источниками, остальные данные соответствуют документам."
+      },
+      "missing_recall": null,
+      "missing_precision": 1.0,
+      "reference_issues": [],
+      "fragments": 5,
+      "cost_rub": "0.211692",
+      "llm_calls": 3,
+      "tokens": 7402,
+      "seconds": 115.5,
+      "card": {
+        "characteristics": {
+          "Модель": "МиксерПро 800",
+          "Артикул": "BLD-800",
+          "Мощность": "800 Вт",
+          "Количество скоростей": "6",
+          "Турбо-режим": "есть",
+          "Материал ножки": "нержавеющая сталь",
+          "Объём мерного стакана": "1,5 л",
+          "Питание": "220 В, 50 Гц",
+          "Вес": "1,2 кг",
+          "Цвет": "графитовый",
+          "Гарантия": "24 месяца",
+          "Страна-производитель": "Китай"
+        },
+        "missing_fields": [],
+        "confidence": 1.0
+      }
+    },
+    {
+      "document": "kettle_manual.pdf",
+      "status": "indexed",
+      "accuracy": 1.0,
+      "citation": 0.0,
+      "citation_detail": {
+        "card_ok": false,
+        "sources_valid": 10,
+        "sources_total": 13,
+        "uncited": [],
+        "probes": "1/1"
+      },
+      "judge": 1.0,
+      "judge_verdict": {
+        "unsupported_characteristics": [],
+        "unsupported_claims": [],
+        "comment": "Все характеристики и утверждения карточки подтверждаются источниками."
+      },
+      "missing_recall": 1.0,
+      "missing_precision": 1.0,
+      "reference_issues": [],
+      "fragments": 3,
+      "cost_rub": "0.242121",
+      "llm_calls": 3,
+      "tokens": 8098,
+      "seconds": 127.1,
+      "card": {
+        "characteristics": {
+          "Модель": "КеттлПро 1.7",
+          "Артикул": "KTL-1700",
+          "Мощность": "2200 Вт",
+          "Объём": "1,7 л",
+          "Материал корпуса": "нержавеющая сталь / пластик",
+          "Тип нагревателя": "закрытая спираль",
+          "Питание": "220 В, 50 Гц",
+          "Вес": "0,9 кг",
+          "Гарантия": "12 месяцев",
+          "Корпус": "двойная стенка (металл снаружи, термостойкий пластик внутри)",
+          "Нагревательная спираль": "закрытая из нержавеющей стали",
+          "Крышка": "откидная с блокировкой",
+          "Фильтр": "от накипи в носике"
+        },
+        "missing_fields": [
+          "цвет",
+          "страна-производитель"
+        ],
+        "confidence": 0.5
+      }
+    }
+  ],
+  "averages": {
+    "accuracy": 1.0,
+    "citation": 0.5,
+    "judge": 1.0,
+    "missing_recall": 1.0,
+    "missing_precision": 1.0
+  },
+  "total_cost_rub": "0.453813"
+}
